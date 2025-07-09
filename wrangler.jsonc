@@ -3,12 +3,26 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */ {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "react-router-hono-fullstack-template",
+  "name": "naijatransfer",
   "compatibility_date": "2025-04-01",
   "main": "./workers/app.ts",
   "vars": {
-    "VALUE_FROM_CLOUDFLARE": "Hello from Hono/CF"
+    "RESEND_API_KEY": "re_TCScdzqZ_B65rfNYd68eUDmb4QzcameCe",
+    "BASE_URL": "http://localhost:5173"
   },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "naijatransfer-db",
+      "database_id": "636a7bf1-45a9-4a02-b15d-f8b383b33ea3"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "FILE_BUCKET",
+      "bucket_name": "naijatransfer-files"
+    }
+  ],
   "observability": {
     "enabled": true
   },
@@ -42,5 +56,8 @@
    * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
    */
   // "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
-  "upload_source_maps": true
+  "upload_source_maps": true,
+  "triggers": {
+    "crons": ["0 0 * * *"]
+  }
 }
