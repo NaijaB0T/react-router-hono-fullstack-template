@@ -25,6 +25,9 @@ export function TransferForm() {
   });
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadComplete, setUploadComplete] = useState(false);
+  const [downloadUrl, setDownloadUrl] = useState<string>('');
+  const [emailStatus, setEmailStatus] = useState<'sending' | 'sent' | 'failed' | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -145,15 +148,12 @@ export function TransferForm() {
 
       await Promise.all(uploadPromises);
       
-      alert('Transfer completed successfully!');
-      
-      // Reset form
-      setFormData({
-        senderEmail: '',
-        recipientEmails: '',
-        message: '',
-        files: []
-      });
+      // Set download URL and completion status
+      const baseUrl = window.location.origin;
+      const downloadLink = `${baseUrl}/download/${transferData.transferId}`;
+      setDownloadUrl(downloadLink);
+      setUploadComplete(true);
+      setEmailStatus('sending');
       
     } catch (error) {
       console.error('Transfer failed:', error);
@@ -227,8 +227,113 @@ export function TransferForm() {
       throw new Error('Failed to complete file upload');
     }
 
-    return await completeResponse.json();
+    const result = await completeResponse.json();
+    
+    // Check if email was sent successfully
+    if (result.emailSent) {
+      setEmailStatus('sent');
+    } else {
+      setEmailStatus('failed');
+    }
+    
+    return result;
   };
+
+  const resetForm = () => {
+    setFormData({
+      senderEmail: '',
+      recipientEmails: '',
+      message: '',
+      files: []
+    });
+    setUploadComplete(false);
+    setDownloadUrl('');
+    setEmailStatus(null);
+  };
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(downloadUrl);
+      alert('Download link copied to clipboard!');
+    } catch (err) {
+      console.error('Failed to copy: ', err);
+    }
+  };
+
+  if (uploadComplete) {
+    return (
+      <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-lg p-6">
+        <div className="text-center">
+          <div className="text-green-500 text-6xl mb-4">✅</div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">Transfer Complete!</h2>
+          
+          {/* Email Status */}
+          <div className="mb-6">
+            {emailStatus === 'sending' && (
+              <div className="flex items-center justify-center text-blue-600">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
+                Sending email notifications...
+              </div>
+            )}
+            {emailStatus === 'sent' && (
+              <div className="text-green-600">
+                ✅ Email notifications sent successfully!
+              </div>
+            )}
+            {emailStatus === 'failed' && (
+              <div className="text-red-600">
+                ⚠️ Email notifications failed to send. You can still share the download link manually.
+              </div>
+            )}
+          </div>
+
+          {/* Download Link */}
+          <div className="bg-gray-50 rounded-lg p-4 mb-6">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Download Link
+            </label>
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                value={downloadUrl}
+                readOnly
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-white text-sm"
+              />
+              <button
+                type="button"
+                onClick={copyToClipboard}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
+              >
+                Copy
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              This link will expire in 7 days
+            </p>
+          </div>
+
+          {/* Actions */}
+          <div className="space-y-3">
+            <a
+              href={downloadUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full bg-green-600 text-white py-3 px-4 rounded-md hover:bg-green-700 transition-colors"
+            >
+              View Download Page
+            </a>
+            <button
+              type="button"
+              onClick={resetForm}
+              className="block w-full bg-gray-600 text-white py-3 px-4 rounded-md hover:bg-gray-700 transition-colors"
+            >
+              Send Another Transfer
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-lg p-6">

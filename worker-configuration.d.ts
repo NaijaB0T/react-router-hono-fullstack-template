@@ -3,7 +3,7 @@
 // Runtime types generated with workerd@1.20250617.0 2025-04-01 
 declare namespace Cloudflare {
 	interface Env {
-		RESEND_API_KEY: "your_local_dev_key";
+		RESEND_API_KEY: string;
 		BASE_URL: "http://localhost:5173";
 		FILE_BUCKET: R2Bucket;
 		DB: D1Database;
