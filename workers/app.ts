@@ -152,8 +152,12 @@ app.post("/api/uploads/chunk", async (c) => {
       return c.json({ error: 'Missing required fields' }, 400);
     }
     
+    console.log(`Uploading part ${partNumber} for upload ${uploadId}`);
+    
     const multipartUpload = c.env.FILE_BUCKET.resumeMultipartUpload(key, uploadId);
     const uploadPart = await multipartUpload.uploadPart(partNumber, chunk);
+    
+    console.log(`Part ${partNumber} uploaded successfully with etag: ${uploadPart.etag}`);
     
     return c.json({ 
       partNumber,
@@ -162,6 +166,41 @@ app.post("/api/uploads/chunk", async (c) => {
     
   } catch (error) {
     console.error('Error uploading chunk:', error);
+    return c.json({ 
+      error: 'Internal server error',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+// Get upload status for resumption
+app.get("/api/uploads/status/:transferId/:fileId", async (c) => {
+  try {
+    const transferId = c.req.param('transferId');
+    const fileId = c.req.param('fileId');
+    
+    // Get file details from database
+    const file = await c.env.DB.prepare(`
+      SELECT * FROM files WHERE id = ? AND transfer_id = ?
+    `).bind(fileId, transferId).first();
+    
+    if (!file) {
+      return c.json({ error: 'File not found' }, 404);
+    }
+    
+    // For R2, we can't directly query uploaded parts, but we can return what we know
+    return c.json({
+      fileId,
+      filename: file.filename,
+      filesize: file.filesize,
+      r2_object_key: file.r2_object_key,
+      // Note: R2 doesn't provide a way to list uploaded parts
+      // so resumption relies on client-side state
+      message: 'Use client-side state for resumption'
+    });
+    
+  } catch (error) {
+    console.error('Error getting upload status:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
