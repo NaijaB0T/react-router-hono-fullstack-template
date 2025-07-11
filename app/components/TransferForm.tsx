@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
+import { useBackgroundProgress } from './BackgroundManager';
 
 interface FileInfo {
   id: string;
@@ -31,6 +32,9 @@ export function TransferForm() {
   const [pausedUploads, setPausedUploads] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  
+  // Background progress integration
+  const { setProgress, setIsUploading: setBackgroundUploading } = useBackgroundProgress();
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -99,6 +103,8 @@ export function TransferForm() {
     if (!isFormValid()) return;
 
     setIsUploading(true);
+    setBackgroundUploading(true);
+    setProgress(0);
     
     try {
       // Step 1: Create transfer and get upload URLs
@@ -173,6 +179,11 @@ export function TransferForm() {
         const downloadLink = `${baseUrl}/download/${transferData.transferId}`;
         setDownloadUrl(downloadLink);
         setUploadComplete(true);
+        setProgress(100);
+        setTimeout(() => {
+          setBackgroundUploading(false);
+          setProgress(0);
+        }, 2000); // Show completion for 2 seconds
         clearUploadState();
       }
       
@@ -186,6 +197,10 @@ export function TransferForm() {
       }
     } finally {
       setIsUploading(false);
+      if (!uploadComplete) {
+        setBackgroundUploading(false);
+        setProgress(0);
+      }
     }
   };
 
@@ -228,6 +243,9 @@ export function TransferForm() {
       }
       
       const progress = Math.min(Math.round((totalBytesUploaded / file.size) * 100), 100);
+      
+      // Update background progress
+      setProgress(progress);
       
       setFormData(prev => ({
         ...prev,
@@ -892,13 +910,13 @@ export function TransferForm() {
   if (uploadComplete) {
     return (
       <div className="text-center">
-        <div className="text-green-500 text-4xl mb-3">✅</div>
-        <h2 className="text-xl font-bold text-gray-900 mb-4">Transfer Complete!</h2>
+        <div className="text-green-500 text-2xl mb-2">✅</div>
+        <h2 className="text-lg font-bold text-gray-900 mb-3">Transfer Complete!</h2>
         
 
         {/* Download Link */}
-        <div className="bg-gray-50 rounded-lg p-4 mb-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+        <div className="bg-gray-50 rounded-lg p-3 mb-3">
+          <label className="block text-xs font-medium text-gray-700 mb-2">
             Download Link
           </label>
           <div className="flex items-center space-x-2">
@@ -906,17 +924,17 @@ export function TransferForm() {
               type="text"
               value={downloadUrl}
               readOnly
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-white text-sm"
+              className="flex-1 px-2 py-1.5 border border-gray-300 rounded-md bg-white text-xs"
             />
             <button
               type="button"
               onClick={copyToClipboard}
-              className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
+              className="px-2 py-1.5 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-xs"
             >
               Copy
             </button>
           </div>
-          <p className="text-xs text-gray-500 mt-2">
+          <p className="text-xs text-gray-500 mt-1 font-light">
             This link will expire in 24 hours
           </p>
         </div>
@@ -927,14 +945,14 @@ export function TransferForm() {
             href={downloadUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="block w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition-colors text-sm"
+            className="block w-full bg-green-600 text-white py-2 px-3 rounded-md hover:bg-green-700 transition-colors text-xs"
           >
             View Download Page
           </a>
           <button
             type="button"
             onClick={resetForm}
-            className="block w-full bg-gray-600 text-white py-2 px-4 rounded-md hover:bg-gray-700 transition-colors text-sm"
+            className="block w-full bg-gray-600 text-white py-2 px-3 rounded-md hover:bg-gray-700 transition-colors text-xs"
           >
             Send Another Transfer
           </button>
@@ -956,7 +974,7 @@ export function TransferForm() {
                 <p className="text-sm font-medium text-orange-800">
                   Previous upload detected
                 </p>
-                <p className="text-xs text-orange-600">
+                <p className="text-sm text-orange-600 font-light">
                   Upload will restart fresh for reliability. Click "Restore Files" to re-select your files and upload again.
                 </p>
               </div>
@@ -995,10 +1013,10 @@ export function TransferForm() {
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* File Upload Area - Simplified */}
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-2">
             {/* Add files button */}
             <div
-              className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 ${
+              className={`border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all duration-200 ${
                 isDragOver
                   ? 'border-blue-500 bg-blue-50 scale-105'
                   : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
@@ -1008,11 +1026,11 @@ export function TransferForm() {
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
             >
-              <div className="space-y-3">
-                <div className="text-4xl">📄</div>
+              <div className="space-y-2">
+                <div className="text-2xl">📄</div>
                 <div>
-                  <p className="font-semibold text-gray-900">+ Add files</p>
-                  <p className="text-xs text-gray-500 mt-1">Up to 15GB</p>
+                  <p className="text-sm font-semibold text-gray-900">+ Add files</p>
+                  <p className="text-xs text-gray-500 mt-1 font-light">Up to 15GB</p>
                 </div>
               </div>
               <input
@@ -1025,12 +1043,12 @@ export function TransferForm() {
             </div>
 
             {/* Add folder button */}
-            <div className="border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 border-gray-300 hover:border-blue-400 hover:bg-gray-50 opacity-50">
-              <div className="space-y-3">
-                <div className="text-4xl">📁</div>
+            <div className="border-2 border-dashed rounded-xl p-4 text-center cursor-pointer transition-all duration-200 border-gray-300 hover:border-blue-400 hover:bg-gray-50 opacity-50">
+              <div className="space-y-2">
+                <div className="text-2xl">📁</div>
                 <div>
-                  <p className="font-semibold text-gray-900">+ Add folders</p>
-                  <p className="text-xs text-gray-500 mt-1">Coming soon</p>
+                  <p className="text-sm font-semibold text-gray-900">+ Add folders</p>
+                  <p className="text-xs text-gray-500 mt-1 font-light">Coming soon</p>
                 </div>
               </div>
             </div>
@@ -1040,22 +1058,22 @@ export function TransferForm() {
         {/* File List */}
         {formData.files.length > 0 && (
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">
+            <label className="block text-xs font-medium text-gray-700">
               Selected Files
             </label>
             <div className="space-y-2">
               {formData.files.map((file) => (
                 <div
                   key={file.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                  className="flex items-center justify-between p-2 bg-gray-50 rounded-lg"
                 >
                   <div className="flex-1">
                     <div className="flex items-center space-x-2">
-                      <span className="text-lg">{getStatusIcon(file.status)}</span>
+                      <span className="text-base">{getStatusIcon(file.status)}</span>
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{file.name}</p>
-                        <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
-                        <p className={`text-xs ${getStatusColor(file.status)}`}>
+                        <p className="text-xs font-medium text-gray-900">{file.name}</p>
+                        <p className="text-xs text-gray-500 font-light">{formatFileSize(file.size)}</p>
+                        <p className={`text-xs font-light ${getStatusColor(file.status)}`}>
                           {file.status === 'pending' && 'Waiting to upload'}
                           {file.status === 'uploading' && `Uploading... ${file.progress}%`}
                           {file.status === 'paused' && 'Paused'}
@@ -1065,9 +1083,9 @@ export function TransferForm() {
                       </div>
                     </div>
                     {(file.status === 'uploading' || file.status === 'paused') && (
-                      <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+                      <div className="w-full bg-gray-200 rounded-full h-1.5 mt-1">
                         <div
-                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                          className="bg-blue-600 h-1.5 rounded-full transition-all duration-300"
                           style={{ width: `${file.progress}%` }}
                         />
                       </div>
@@ -1080,7 +1098,7 @@ export function TransferForm() {
                       <button
                         type="button"
                         onClick={() => pauseFileUpload(file.id)}
-                        className="px-2 py-1 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600"
+                        className="px-1.5 py-0.5 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600"
                         title="Pause upload"
                       >
                         ⏸️
@@ -1091,7 +1109,7 @@ export function TransferForm() {
                       <button
                         type="button"
                         onClick={() => resumeFileUpload(file)}
-                        className="px-2 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600"
+                        className="px-1.5 py-0.5 text-xs bg-green-500 text-white rounded hover:bg-green-600"
                         title={file.status === 'paused' ? 'Resume upload' : 'Retry upload'}
                       >
                         {file.status === 'paused' ? '▶️' : '🔄'}
@@ -1118,19 +1136,19 @@ export function TransferForm() {
 
         {/* Upload Controls */}
         {isUploading && (
-          <div className="bg-blue-50 rounded-lg p-4 mb-4">
+          <div className="bg-blue-50 rounded-lg p-3 mb-3">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-blue-900">Upload Progress</span>
-              <span className="text-sm text-blue-700">
+              <span className="text-xs font-medium text-blue-900">Upload Progress</span>
+              <span className="text-sm text-blue-700 font-light">
                 {formData.files.filter(f => f.status === 'completed').length} / {formData.files.length} files completed
               </span>
             </div>
             
             {/* Resume Warning */}
-            <div className="bg-yellow-50 border border-yellow-200 rounded p-2 mb-3">
+            <div className="bg-yellow-50 border border-yellow-200 rounded p-2 mb-2">
               <div className="flex items-center space-x-2">
-                <span className="text-yellow-600 text-sm">⚠️</span>
-                <p className="text-xs text-yellow-700">
+                <span className="text-yellow-600 text-xs">⚠️</span>
+                <p className="text-xs text-yellow-700 font-light">
                   <strong>Stay on this page</strong> to use pause/resume. Closing or refreshing will require re-uploading.
                 </p>
               </div>
@@ -1146,7 +1164,7 @@ export function TransferForm() {
                     }
                   });
                 }}
-                className="px-3 py-1 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600"
+                className="px-2 py-1 text-xs bg-yellow-500 text-white rounded hover:bg-yellow-600"
               >
                 Pause All
               </button>
@@ -1159,7 +1177,7 @@ export function TransferForm() {
                     }
                   });
                 }}
-                className="px-3 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600"
+                className="px-2 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600"
               >
                 Resume All
               </button>
@@ -1172,11 +1190,12 @@ export function TransferForm() {
                     clearUploadState();
                   }
                 }}
-                className="px-3 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600"
+                className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600"
               >
                 Cancel All
               </button>
             </div>
+            
           </div>
         )}
 
@@ -1185,10 +1204,10 @@ export function TransferForm() {
         <button
           type="submit"
           disabled={!isFormValid() || isUploading}
-          className={`w-full py-4 px-6 rounded-xl font-semibold text-white transition-all duration-200 ${
+          className={`w-full py-3 px-4 rounded-lg font-semibold text-sm text-white transition-all duration-200 ${
             !isFormValid() || isUploading
               ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-200 transform hover:scale-[1.02]'
+              : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-200'
           }`}
         >
           {isUploading ? 'Uploading...' : 'Transfer'}
