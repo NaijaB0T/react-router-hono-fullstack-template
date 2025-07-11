@@ -394,6 +394,31 @@ export function TransferForm() {
     localStorage.removeItem('naijatransfer_upload_state');
   };
 
+  const convertToFreshUpload = async (fileInfo: FileInfo) => {
+    setFormData(prev => ({
+      ...prev,
+      files: prev.files.map(f => 
+        f.id === fileInfo.id ? { 
+          ...f, 
+          status: 'pending' as const,
+          error: undefined,
+          progress: 0,
+          uploadedParts: [],
+          currentPart: 0,
+          uploadId: undefined,
+          key: undefined
+        } : f
+      )
+    }));
+    
+    // Clear any stale transfer state
+    setTransferId('');
+    clearUploadState();
+    setShowResumeNotification(false);
+    
+    alert('Previous upload is no longer valid. File will start as a fresh upload.\nClick "Upload Files" to begin.');
+  };
+
   const promptFileReselection = async (fileInfo: FileInfo): Promise<void> => {
     return new Promise((resolve) => {
       // Create a temporary file input
@@ -523,6 +548,40 @@ export function TransferForm() {
       return;
     }
 
+    // First, validate the transfer exists and hasn't expired
+    if (transferId) {
+      try {
+        const validateResponse = await fetch(`/api/transfers/validate/${transferId}`);
+        const validation = await validateResponse.json() as { valid: boolean; reason?: string };
+        
+        if (!validation.valid) {
+          console.log('Transfer validation failed:', validation.reason);
+          setFormData(prev => ({
+            ...prev,
+            files: prev.files.map(f => 
+              f.id === fileInfo.id ? { 
+                ...f, 
+                status: 'error' as const,
+                error: `Cannot resume: ${validation.reason}. Please start a fresh upload.`
+              } : f
+            )
+          }));
+          
+          // Clear stale state
+          setTransferId('');
+          clearUploadState();
+          setShowResumeNotification(false);
+          
+          alert(`Cannot resume upload: ${validation.reason}\nPlease start a fresh upload.`);
+          return;
+        }
+      } catch (error) {
+        console.error('Error validating transfer:', error);
+        alert('Unable to validate transfer. Please start a fresh upload.');
+        return;
+      }
+    }
+
     // Check if we have the actual File object (needed for resume)
     if (!fileInfo.file) {
       console.log('File object missing, prompting user to re-select file');
@@ -530,87 +589,10 @@ export function TransferForm() {
       return;
     }
 
-    // Check for upload metadata after we have the file
-    if (!fileInfo.uploadId || !fileInfo.key || !transferId) {
-      console.log('Missing upload metadata - converting to fresh upload');
-      setFormData(prev => ({
-        ...prev,
-        files: prev.files.map(f => 
-          f.id === fileInfo.id ? { 
-            ...f, 
-            status: 'pending' as const,
-            error: undefined,
-            progress: 0,
-            uploadedParts: [],
-            currentPart: 0
-          } : f
-        )
-      }));
-      
-      // Clear any stale transfer state
-      setTransferId('');
-      clearUploadState();
-      setShowResumeNotification(false);
-      
-      alert('Upload will start fresh. Click "Upload Files" to begin.');
-      return;
-    }
-
-    setPausedUploads(prev => {
-      const newSet = new Set(prev);
-      newSet.delete(fileInfo.id);
-      return newSet;
-    });
-
-    setFormData(prev => ({
-      ...prev,
-      files: prev.files.map(f => 
-        f.id === fileInfo.id ? { ...f, status: 'uploading' as const, error: undefined } : f
-      )
-    }));
-
-    try {
-      const fileData = {
-        uploadId: fileInfo.uploadId,
-        key: fileInfo.key
-      };
-      
-      console.log(`Resuming upload for ${fileInfo.name}, current progress: ${fileInfo.progress}%`);
-      const uploadParts = await uploadFileInChunks(fileInfo, fileData);
-      
-      // Check if file is now complete (uploadFileInChunks handles completion status)
-      // Only call completeFileUpload if we have all parts and the file status is 'completed'
-      const updatedFile = formData.files.find(f => f.id === fileInfo.id);
-      if (updatedFile && updatedFile.status === 'completed' && uploadParts && uploadParts.length > 0) {
-        console.log(`Completing upload for ${fileInfo.name} with ${uploadParts.length} parts`);
-        await completeFileUpload(transferId, fileData, uploadParts);
-      } else {
-        console.log(`Upload not complete for ${fileInfo.name}, resuming later or paused`);
-      }
-    } catch (error) {
-      // Handle pause/abort vs real errors
-      if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Upload paused')) {
-        console.log(`Upload paused again for ${fileInfo.name}`);
-        setFormData(prev => ({
-          ...prev,
-          files: prev.files.map(f => 
-            f.id === fileInfo.id ? { ...f, status: 'paused' as const } : f
-          )
-        }));
-      } else {
-        console.error('Resume upload failed:', error);
-        setFormData(prev => ({
-          ...prev,
-          files: prev.files.map(f => 
-            f.id === fileInfo.id ? { 
-              ...f, 
-              status: 'error' as const,
-              error: error instanceof Error ? error.message : 'Resume failed'
-            } : f
-          )
-        }));
-      }
-    }
+    // For production reliability, always convert to fresh upload after page refresh
+    // Multipart upload state is unreliable across browser sessions
+    console.log('Converting to fresh upload for reliability');
+    await convertToFreshUpload(fileInfo);
   };
 
   const retryFileUpload = (fileInfo: FileInfo) => {
@@ -657,7 +639,7 @@ export function TransferForm() {
           return {
             ...file,
             status: file.status === 'completed' ? 'completed' as const : 'error' as const,
-            error: file.status !== 'completed' ? 'Click the 🔄 button to re-select this file and resume upload.' : undefined
+            error: file.status !== 'completed' ? 'Click the 🔄 button to re-select this file for fresh upload.' : undefined
           };
         });
         
@@ -767,16 +749,16 @@ export function TransferForm() {
 
       {/* Resume Notification */}
       {showResumeNotification && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <span className="text-blue-600 text-lg mr-2">🔄</span>
+              <span className="text-orange-600 text-lg mr-2">🔄</span>
               <div>
-                <p className="text-sm font-medium text-blue-800">
-                  Interrupted upload detected
+                <p className="text-sm font-medium text-orange-800">
+                  Previous upload detected
                 </p>
-                <p className="text-xs text-blue-600">
-                  You can resume your upload! Click "Resume" and re-select the same files to continue from where you left off.
+                <p className="text-xs text-orange-600">
+                  Upload will restart fresh for reliability. Click "Restore Files" to re-select your files and upload again.
                 </p>
               </div>
             </div>
@@ -785,15 +767,15 @@ export function TransferForm() {
                 type="button"
                 onClick={() => {
                   formData.files.forEach(file => {
-                    if (file.status === 'error' && file.uploadId && file.key) {
+                    if (file.status === 'error') {
                       resumeFileUpload(file);
                     }
                   });
                   setShowResumeNotification(false);
                 }}
-                className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+                className="px-3 py-1 text-xs bg-orange-600 text-white rounded hover:bg-orange-700"
               >
-                Resume
+                Restore Files
               </button>
               <button
                 type="button"

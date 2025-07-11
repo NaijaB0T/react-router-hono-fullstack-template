@@ -185,6 +185,50 @@ app.post("/api/uploads/chunk", async (c) => {
   }
 });
 
+// Validate transfer for resumption
+app.get("/api/transfers/validate/:transferId", async (c) => {
+  try {
+    const transferId = c.req.param('transferId');
+    
+    // Check if transfer exists and is not expired
+    const transfer = await c.env.DB.prepare(`
+      SELECT * FROM transfers WHERE id = ? AND expires_at > ?
+    `).bind(transferId, Date.now()).first();
+    
+    if (!transfer) {
+      return c.json({ 
+        valid: false, 
+        reason: 'Transfer not found or expired' 
+      });
+    }
+    
+    // If transfer is already complete, no need to resume
+    if (transfer.status === 'complete') {
+      return c.json({ 
+        valid: false, 
+        reason: 'Transfer already completed' 
+      });
+    }
+    
+    return c.json({ 
+      valid: true, 
+      transfer: {
+        id: transfer.id,
+        status: transfer.status,
+        expires_at: transfer.expires_at,
+        created_at: transfer.created_at
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error validating transfer:', error);
+    return c.json({ 
+      valid: false, 
+      reason: 'Server error during validation' 
+    }, 500);
+  }
+});
+
 // Get upload status for resumption
 app.get("/api/uploads/status/:transferId/:fileId", async (c) => {
   try {
@@ -343,43 +387,104 @@ export default {
     try {
       const now = Date.now();
       
-      // Get expired transfers
+      // 1. Clean up completed expired transfers
       const expiredTransfers = await env.DB.prepare(`
         SELECT id FROM transfers WHERE expires_at < ? AND status = 'complete'
       `).bind(now).all();
       
       for (const transfer of expiredTransfers.results as Array<{ id: string }>) {
-        // Get files for this transfer
-        const files = await env.DB.prepare(`
-          SELECT r2_object_key FROM files WHERE transfer_id = ?
-        `).bind(transfer.id).all();
-        
-        // Delete files from R2
-        for (const file of files.results as Array<{ r2_object_key: string }>) {
-          if (file.r2_object_key) {
-            try {
-              await env.FILE_BUCKET.delete(file.r2_object_key);
-            } catch (error) {
-              console.error(`Error deleting file ${file.r2_object_key}:`, error);
-            }
-          }
-        }
-        
-        // Delete file records
-        await env.DB.prepare(`
-          DELETE FROM files WHERE transfer_id = ?
-        `).bind(transfer.id).run();
-        
-        // Delete transfer record
-        await env.DB.prepare(`
-          DELETE FROM transfers WHERE id = ?
-        `).bind(transfer.id).run();
+        await cleanupTransfer(env, transfer.id, 'expired completed');
       }
       
-      console.log(`Cleaned up ${expiredTransfers.results.length} expired transfers`);
+      // 2. Clean up abandoned incomplete transfers (older than 24 hours)
+      const abandonedTransfers = await env.DB.prepare(`
+        SELECT id FROM transfers WHERE expires_at < ? AND status = 'pending'
+      `).bind(now).all();
+      
+      for (const transfer of abandonedTransfers.results as Array<{ id: string }>) {
+        await cleanupIncompleteTransfer(env, transfer.id);
+      }
+      
+      console.log(`Cleaned up ${expiredTransfers.results.length} expired transfers and ${abandonedTransfers.results.length} abandoned transfers`);
       
     } catch (error) {
       console.error('Error during cleanup:', error);
     }
   }
+
+// Helper function to clean up a completed transfer
+async function cleanupTransfer(env: Env, transferId: string, reason: string) {
+  try {
+    // Get files for this transfer
+    const files = await env.DB.prepare(`
+      SELECT r2_object_key FROM files WHERE transfer_id = ?
+    `).bind(transferId).all();
+    
+    // Delete files from R2
+    for (const file of files.results as Array<{ r2_object_key: string }>) {
+      if (file.r2_object_key) {
+        try {
+          await env.FILE_BUCKET.delete(file.r2_object_key);
+          console.log(`Deleted ${reason} file: ${file.r2_object_key}`);
+        } catch (error) {
+          console.error(`Error deleting file ${file.r2_object_key}:`, error);
+        }
+      }
+    }
+    
+    // Delete file records
+    await env.DB.prepare(`
+      DELETE FROM files WHERE transfer_id = ?
+    `).bind(transferId).run();
+    
+    // Delete transfer record
+    await env.DB.prepare(`
+      DELETE FROM transfers WHERE id = ?
+    `).bind(transferId).run();
+    
+  } catch (error) {
+    console.error(`Error cleaning up transfer ${transferId}:`, error);
+  }
+}
+
+// Helper function to clean up incomplete transfers and their multipart uploads
+async function cleanupIncompleteTransfer(env: Env, transferId: string) {
+  try {
+    // Get files for this transfer with their upload metadata
+    const files = await env.DB.prepare(`
+      SELECT r2_object_key FROM files WHERE transfer_id = ?
+    `).bind(transferId).all();
+    
+    // For incomplete transfers, we need to abort multipart uploads
+    // Note: R2 doesn't provide a direct way to list/abort multipart uploads
+    // So we'll just delete any partial objects and let R2's lifecycle policies handle cleanup
+    for (const file of files.results as Array<{ r2_object_key: string }>) {
+      if (file.r2_object_key) {
+        try {
+          // Try to delete the object (in case it was partially uploaded)
+          await env.FILE_BUCKET.delete(file.r2_object_key);
+          console.log(`Cleaned up abandoned upload: ${file.r2_object_key}`);
+        } catch (error) {
+          // This is expected for incomplete uploads - the object doesn't exist yet
+          console.log(`No object to delete for ${file.r2_object_key} (expected for incomplete upload)`);
+        }
+      }
+    }
+    
+    // Delete file records
+    await env.DB.prepare(`
+      DELETE FROM files WHERE transfer_id = ?
+    `).bind(transferId).run();
+    
+    // Delete transfer record
+    await env.DB.prepare(`
+      DELETE FROM transfers WHERE id = ?
+    `).bind(transferId).run();
+    
+    console.log(`Cleaned up abandoned transfer: ${transferId}`);
+    
+  } catch (error) {
+    console.error(`Error cleaning up incomplete transfer ${transferId}:`, error);
+  }
+}
 };
