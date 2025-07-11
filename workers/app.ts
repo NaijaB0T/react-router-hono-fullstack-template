@@ -52,16 +52,34 @@ app.post("/api/transfers", async (c) => {
       return c.json({ error: 'Database not configured' }, 500);
     }
     
-    // Insert transfer record
-    await c.env.DB.prepare(`
-      INSERT INTO transfers (id, status, expires_at, created_at)
-      VALUES (?, ?, ?, ?)
-    `).bind(
-      transferId,
-      'pending',
-      expiresAt,
-      createdAt
-    ).run();
+    // Insert transfer record (handle both old and new schema)
+    try {
+      // Try new schema first
+      await c.env.DB.prepare(`
+        INSERT INTO transfers (id, status, expires_at, created_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(
+        transferId,
+        'pending',
+        expiresAt,
+        createdAt
+      ).run();
+    } catch (error) {
+      console.log('New schema failed, trying old schema compatibility...');
+      // Fallback to old schema with dummy email values
+      await c.env.DB.prepare(`
+        INSERT INTO transfers (id, sender_email, recipient_emails, message, status, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        transferId,
+        'anonymous@naijatransfer.com', // dummy email
+        JSON.stringify(['anonymous@naijatransfer.com']), // dummy email array
+        null, // no message
+        'pending',
+        expiresAt,
+        createdAt
+      ).run();
+    }
     
     console.log('Transfer record inserted successfully');
     

@@ -152,22 +152,38 @@ export function TransferForm() {
         const fileData = transferData.files[index];
         const uploadParts = await uploadFileInChunks(fileInfo, fileData);
         
-        // Complete this file upload
-        return await completeFileUpload(transferData.transferId, fileData, uploadParts);
+        // Only complete upload if we have parts (not paused)
+        if (uploadParts.length > 0) {
+          return await completeFileUpload(transferData.transferId, fileData, uploadParts);
+        }
+        return null; // Paused upload
       });
 
-      await Promise.all(uploadPromises);
+      const results = await Promise.allSettled(uploadPromises);
       
-      // Set download URL and completion status
-      const baseUrl = window.location.origin;
-      const downloadLink = `${baseUrl}/download/${transferData.transferId}`;
-      setDownloadUrl(downloadLink);
-      setUploadComplete(true);
-      clearUploadState();
+      // Check if any uploads completed successfully
+      const completedUploads = results.filter(result => 
+        result.status === 'fulfilled' && result.value !== null
+      );
+      
+      // Only show completion if at least one file completed
+      if (completedUploads.length > 0) {
+        // Set download URL and completion status
+        const baseUrl = window.location.origin;
+        const downloadLink = `${baseUrl}/download/${transferData.transferId}`;
+        setDownloadUrl(downloadLink);
+        setUploadComplete(true);
+        clearUploadState();
+      }
       
     } catch (error) {
-      console.error('Transfer failed:', error);
-      alert('Transfer failed. Please try again.');
+      // Don't show error for pause/abort operations
+      if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Upload paused')) {
+        console.log('Upload paused by user');
+      } else {
+        console.error('Transfer failed:', error);
+        alert('Transfer failed. Please try again.');
+      }
     } finally {
       setIsUploading(false);
     }
@@ -277,7 +293,14 @@ export function TransferForm() {
 
       return uploadParts;
     } catch (error) {
-      // Mark file as error
+      // Check if this is a pause/abort operation (not an actual error)
+      if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Upload paused')) {
+        // This is expected - user paused the upload
+        console.log(`Upload paused for file ${fileInfo.id}`);
+        return []; // Return empty array to avoid completing the upload
+      }
+      
+      // Mark file as error only for real errors
       setFormData(prev => ({
         ...prev,
         files: prev.files.map(f => 
@@ -295,6 +318,11 @@ export function TransferForm() {
   };
 
   const completeFileUpload = async (transferId: string, fileData: any, uploadParts: any[]) => {
+    // Don't complete if no parts (paused upload)
+    if (!uploadParts || uploadParts.length === 0) {
+      return null;
+    }
+    
     const completeResponse = await fetch('/api/transfers/complete', {
       method: 'POST',
       headers: {
@@ -313,7 +341,6 @@ export function TransferForm() {
     }
 
     const result = await completeResponse.json();
-    
     
     return result;
   };
