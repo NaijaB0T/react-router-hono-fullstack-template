@@ -16,24 +16,17 @@ interface FileInfo {
 }
 
 interface TransferFormData {
-  senderEmail: string;
-  recipientEmails: string;
-  message: string;
   files: FileInfo[];
 }
 
 export function TransferForm() {
   const [formData, setFormData] = useState<TransferFormData>({
-    senderEmail: '',
-    recipientEmails: '',
-    message: '',
     files: []
   });
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadComplete, setUploadComplete] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string>('');
-  const [emailStatus, setEmailStatus] = useState<'sending' | 'sent' | 'failed' | null>(null);
   const [transferId, setTransferId] = useState<string>('');
   const [pausedUploads, setPausedUploads] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -97,17 +90,9 @@ export function TransferForm() {
   };
 
   const isFormValid = () => {
-    return formData.senderEmail &&
-           formData.recipientEmails &&
-           formData.files.length > 0 &&
-           isValidEmail(formData.senderEmail) &&
-           formData.recipientEmails.split(',').every(email => isValidEmail(email.trim()));
+    return formData.files.length > 0;
   };
 
-  const isValidEmail = (email: string): boolean => {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(email);
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,9 +108,6 @@ export function TransferForm() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          senderEmail: formData.senderEmail,
-          recipientEmails: formData.recipientEmails,
-          message: formData.message,
           files: formData.files.map(f => ({
             filename: f.name,
             filesize: f.size
@@ -134,7 +116,7 @@ export function TransferForm() {
       });
 
       if (!transferResponse.ok) {
-        const errorData = await transferResponse.json().catch(() => ({ error: 'Unknown error' }));
+        const errorData = await transferResponse.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
         console.error('Transfer creation failed:', errorData);
         throw new Error(`Failed to create transfer: ${errorData.error || 'Unknown error'}`);
       }
@@ -181,7 +163,6 @@ export function TransferForm() {
       const downloadLink = `${baseUrl}/download/${transferData.transferId}`;
       setDownloadUrl(downloadLink);
       setUploadComplete(true);
-      setEmailStatus('sending');
       clearUploadState();
       
     } catch (error) {
@@ -333,12 +314,6 @@ export function TransferForm() {
 
     const result = await completeResponse.json();
     
-    // Check if email was sent successfully
-    if (result.emailSent) {
-      setEmailStatus('sent');
-    } else {
-      setEmailStatus('failed');
-    }
     
     return result;
   };
@@ -369,14 +344,10 @@ export function TransferForm() {
     abortControllersRef.current.clear();
     
     setFormData({
-      senderEmail: '',
-      recipientEmails: '',
-      message: '',
       files: []
     });
     setUploadComplete(false);
     setDownloadUrl('');
-    setEmailStatus(null);
     setTransferId('');
     setPausedUploads(new Set());
     clearUploadState();
@@ -522,25 +493,6 @@ export function TransferForm() {
           <div className="text-green-500 text-6xl mb-4">✅</div>
           <h2 className="text-2xl font-bold text-gray-900 mb-4">Transfer Complete!</h2>
           
-          {/* Email Status */}
-          <div className="mb-6">
-            {emailStatus === 'sending' && (
-              <div className="flex items-center justify-center text-blue-600">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-2"></div>
-                Sending email notifications...
-              </div>
-            )}
-            {emailStatus === 'sent' && (
-              <div className="text-green-600">
-                ✅ Email notifications sent successfully!
-              </div>
-            )}
-            {emailStatus === 'failed' && (
-              <div className="text-red-600">
-                ⚠️ Email notifications failed to send. You can still share the download link manually.
-              </div>
-            )}
-          </div>
 
           {/* Download Link */}
           <div className="bg-gray-50 rounded-lg p-4 mb-6">
@@ -563,7 +515,7 @@ export function TransferForm() {
               </button>
             </div>
             <p className="text-xs text-gray-500 mt-2">
-              This link will expire in 7 days
+              This link will expire in 24 hours
             </p>
           </div>
 
@@ -592,6 +544,22 @@ export function TransferForm() {
 
   return (
     <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-lg p-6">
+      {/* Service Information */}
+      <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+        <div className="flex items-start space-x-3">
+          <div className="text-green-600 text-xl">🆓</div>
+          <div>
+            <h3 className="text-sm font-semibold text-green-800 mb-1">Free File Transfer Service</h3>
+            <p className="text-xs text-green-700 mb-2">
+              Upload up to <strong>15GB per file</strong> completely free! Files are automatically deleted after <strong>24 hours</strong> to keep storage costs manageable for our developers.
+            </p>
+            <p className="text-xs text-green-600">
+              This service is provided free of charge. The short duration helps us maintain sustainable hosting costs while serving the community.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* Resume Notification */}
       {showResumeNotification && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
@@ -658,7 +626,8 @@ export function TransferForm() {
             <div className="space-y-2">
               <div className="text-gray-600">
                 <p className="text-lg">Drop files here or click to select</p>
-                <p className="text-sm">Multiple files are supported</p>
+                <p className="text-sm">Multiple files are supported • Max 15GB per file</p>
+                <p className="text-xs text-gray-500 mt-2">Files expire automatically after 24 hours</p>
               </div>
             </div>
             <input
@@ -749,61 +718,6 @@ export function TransferForm() {
           </div>
         )}
 
-        {/* Sender Email */}
-        <div>
-          <label htmlFor="senderEmail" className="block text-sm font-medium text-gray-700 mb-1">
-            Your Email
-          </label>
-          <input
-            type="email"
-            id="senderEmail"
-            name="senderEmail"
-            value={formData.senderEmail}
-            onChange={handleInputChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="your@email.com"
-            required
-            disabled={isUploading}
-          />
-        </div>
-
-        {/* Recipient Emails */}
-        <div>
-          <label htmlFor="recipientEmails" className="block text-sm font-medium text-gray-700 mb-1">
-            Recipient Email(s)
-          </label>
-          <input
-            type="text"
-            id="recipientEmails"
-            name="recipientEmails"
-            value={formData.recipientEmails}
-            onChange={handleInputChange}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="recipient@email.com, another@email.com"
-            required
-            disabled={isUploading}
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Separate multiple emails with commas
-          </p>
-        </div>
-
-        {/* Message */}
-        <div>
-          <label htmlFor="message" className="block text-sm font-medium text-gray-700 mb-1">
-            Message (Optional)
-          </label>
-          <textarea
-            id="message"
-            name="message"
-            value={formData.message}
-            onChange={handleInputChange}
-            rows={4}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="Add a message to your recipients..."
-            disabled={isUploading}
-          />
-        </div>
 
         {/* Upload Controls */}
         {isUploading && (
@@ -868,7 +782,7 @@ export function TransferForm() {
               : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500'
           }`}
         >
-          {isUploading ? 'Uploading...' : 'Send Transfer'}
+          {isUploading ? 'Uploading...' : 'Upload Files'}
         </button>
       </form>
     </div>

@@ -10,12 +10,9 @@ app.use('/api/*', cors());
 
 // Validation schemas
 const CreateTransferSchema = z.object({
-  senderEmail: z.string().email(),
-  recipientEmails: z.string().min(1),
-  message: z.string().optional(),
   files: z.array(z.object({
     filename: z.string(),
-    filesize: z.number().positive()
+    filesize: z.number().positive().max(15 * 1024 * 1024 * 1024) // 15GB limit
   }))
 });
 
@@ -43,7 +40,7 @@ app.post("/api/transfers", async (c) => {
     console.log('Validation successful');
     
     const transferId = crypto.randomUUID();
-    const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days from now
+    const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 hours from now
     const createdAt = Date.now();
     
     console.log('Inserting transfer record...');
@@ -57,13 +54,10 @@ app.post("/api/transfers", async (c) => {
     
     // Insert transfer record
     await c.env.DB.prepare(`
-      INSERT INTO transfers (id, sender_email, recipient_emails, message, status, expires_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO transfers (id, status, expires_at, created_at)
+      VALUES (?, ?, ?, ?)
     `).bind(
       transferId,
-      validatedData.senderEmail,
-      JSON.stringify(validatedData.recipientEmails.split(',').map(e => e.trim())),
-      validatedData.message || null,
       'pending',
       expiresAt,
       createdAt
@@ -224,18 +218,7 @@ app.post("/api/transfers/complete", async (c) => {
       UPDATE transfers SET status = 'complete' WHERE id = ?
     `).bind(validatedData.transferId).run();
     
-    // Get transfer details for email notification
-    const transfer = await c.env.DB.prepare(`
-      SELECT * FROM transfers WHERE id = ?
-    `).bind(validatedData.transferId).first();
-    
-    let emailSent = false;
-    if (transfer) {
-      // Send email notification
-      emailSent = await sendEmailNotification(c.env, transfer, validatedData.transferId);
-    }
-    
-    return c.json({ success: true, object, emailSent });
+    return c.json({ success: true, object });
     
   } catch (error) {
     console.error('Error completing transfer:', error);
@@ -321,104 +304,6 @@ app.get("/api/file/:transferId/:filename", async (c) => {
   }
 });
 
-// Email notification function
-async function sendEmailNotification(env: Env, transfer: any, transferId: string): Promise<boolean> {
-  try {
-    const recipientEmails = JSON.parse(transfer.recipient_emails);
-    const allEmails = [transfer.sender_email, ...recipientEmails];
-    
-    const downloadUrl = `${env.BASE_URL || 'https://naijatransfer.com'}/download/${transferId}`;
-    
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>File Transfer Ready - NaijaTransfer</title>
-      </head>
-      <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-          <h1 style="color: #2563eb; margin: 0 0 10px 0; font-size: 24px;">📦 NaijaTransfer</h1>
-          <p style="margin: 0; color: #6b7280;">Fast, secure file transfer made simple</p>
-        </div>
-        
-        <div style="background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          <h2 style="color: #1f2937; margin-top: 0;">Your file transfer is ready!</h2>
-          
-          <p style="margin-bottom: 20px;">A file transfer has been sent to you${transfer.message ? ' with the following message:' : '.'}</p>
-          
-          ${transfer.message ? `
-            <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0; border-left: 4px solid #2563eb;">
-              <p style="margin: 0; font-style: italic;">"${transfer.message}"</p>
-            </div>
-          ` : ''}
-          
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${downloadUrl}" style="background-color: #10b981; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; font-size: 16px;">
-              📥 Download Files
-            </a>
-          </div>
-          
-          <div style="background-color: #fef3c7; padding: 15px; border-radius: 6px; margin: 20px 0;">
-            <p style="margin: 0; color: #92400e; font-size: 14px;">
-              ⏰ <strong>Important:</strong> This transfer will expire in 7 days from now.
-            </p>
-          </div>
-          
-          <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
-            <p style="margin: 0; color: #6b7280; font-size: 14px;">
-              Powered by <strong>NaijaTransfer</strong> - Fast & Secure File Transfer
-            </p>
-            <p style="margin: 5px 0 0 0; color: #6b7280; font-size: 12px;">
-              Built on the Cloudflare Developer Platform
-            </p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-    
-    let allEmailsSent = true;
-    
-    // Send email to each recipient individually
-    for (const email of allEmails) {
-      try {
-        const emailData = {
-          from: 'NaijaTransfer <noreply@naijatransfer.com>',
-          to: [email],
-          subject: '📦 Your file transfer is ready for download',
-          html: htmlContent
-        };
-        
-        const response = await fetch('https://api.resend.com/emails', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${env.RESEND_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(emailData)
-        });
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error(`Resend error for ${email}:`, errorText);
-          allEmailsSent = false;
-        } else {
-          console.log(`Email sent successfully to ${email}`);
-        }
-      } catch (error) {
-        console.error(`Error sending email to ${email}:`, error);
-        allEmailsSent = false;
-      }
-    }
-    
-    return allEmailsSent;
-  } catch (error) {
-    console.error('Error in sendEmailNotification:', error);
-    return false;
-  }
-}
 
 app.get("*", (c) => {
   const requestHandler = createRequestHandler(

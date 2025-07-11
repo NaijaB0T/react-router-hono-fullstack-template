@@ -1,9 +1,6 @@
 -- migrations/0001_initial_schema.sql
 CREATE TABLE transfers (
     id TEXT PRIMARY KEY,
-    sender_email TEXT NOT NULL,
-    recipient_emails TEXT NOT NULL, -- Storing as a JSON array
-    message TEXT,
     status TEXT NOT NULL DEFAULT 'pending', -- pending -> complete -> expired
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL

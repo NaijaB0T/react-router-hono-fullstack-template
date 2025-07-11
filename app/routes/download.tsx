@@ -1,11 +1,8 @@
 import { useParams } from "react-router";
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 
 interface Transfer {
   id: string;
-  sender_email: string;
-  recipient_emails: string;
-  message: string;
   status: string;
   expires_at: number;
   created_at: number;
@@ -29,6 +26,7 @@ export default function DownloadPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [downloadingFiles, setDownloadingFiles] = useState<Set<string>>(new Set());
+  const [timeLeft, setTimeLeft] = useState<number>(0);
 
   useEffect(() => {
     const fetchDownloadData = async () => {
@@ -71,12 +69,26 @@ export default function DownloadPage() {
   };
 
   const handleDownload = async (file: FileInfo) => {
+    // Check if transfer is expired
+    if (timeLeft <= 0) {
+      alert('This transfer has expired and files are no longer available for download.');
+      return;
+    }
+    
     setDownloadingFiles(prev => new Set([...prev, file.id]));
     
     try {
-      const response = await fetch(`/api/file/${transferId}/${file.filename}`);
+      const response = await fetch(`/api/file/${transferId}/${encodeURIComponent(file.filename)}`);
       if (!response.ok) {
-        throw new Error('Failed to download file');
+        const errorText = await response.text().catch(() => 'Unknown error');
+        throw new Error(`Download failed (${response.status}): ${errorText}`);
+      }
+      
+      // Check if response is actually a file
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const errorData = await response.json() as { error?: string };
+        throw new Error(errorData.error || 'Server returned an error');
       }
       
       const blob = await response.blob();
@@ -86,9 +98,15 @@ export default function DownloadPage() {
       a.download = file.filename;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
+      
+      // Clean up after a short delay to ensure download starts
+      setTimeout(() => {
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      }, 100);
+      
     } catch (err) {
+      console.error('Download error:', err);
       alert('Failed to download file: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
       setDownloadingFiles(prev => {
@@ -143,10 +161,46 @@ export default function DownloadPage() {
   }
 
   const { transfer, files } = downloadData;
-  const recipientEmails = JSON.parse(transfer.recipient_emails);
   const expiresAt = new Date(transfer.expires_at);
-  const timeLeft = expiresAt.getTime() - Date.now();
-  const daysLeft = Math.ceil(timeLeft / (1000 * 60 * 60 * 24));
+  
+  // Set up realtime countdown
+  React.useEffect(() => {
+    const updateTimeLeft = () => {
+      const now = Date.now();
+      const remaining = expiresAt.getTime() - now;
+      setTimeLeft(Math.max(0, remaining));
+    };
+    
+    updateTimeLeft(); // Initial update
+    const interval = setInterval(updateTimeLeft, 1000); // Update every second
+    
+    return () => clearInterval(interval);
+  }, [expiresAt]);
+  
+  const formatTimeRemaining = (milliseconds: number): string => {
+    if (milliseconds <= 0) return 'Expired';
+    
+    const totalSeconds = Math.floor(milliseconds / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    } else {
+      return `${seconds}s`;
+    }
+  };
+  
+  const getTimeLeftColor = (): string => {
+    const hoursLeft = timeLeft / (1000 * 60 * 60);
+    if (hoursLeft > 12) return 'text-green-700 bg-green-100';
+    if (hoursLeft > 6) return 'text-yellow-700 bg-yellow-100';
+    if (hoursLeft > 1) return 'text-orange-700 bg-orange-100';
+    return 'text-red-700 bg-red-100';
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
@@ -157,40 +211,44 @@ export default function DownloadPage() {
             <p className="text-gray-600">Your files are ready for download</p>
           </div>
 
-          {/* Transfer Details */}
-          <div className="bg-blue-50 rounded-lg p-4 mb-6">
-            <h2 className="text-lg font-semibold text-blue-900 mb-2">Transfer Details</h2>
+          {/* Service Information */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+            <div className="flex items-center space-x-2 mb-2">
+              <span className="text-blue-600 text-lg">🆓</span>
+              <h3 className="text-sm font-semibold text-blue-800">Free File Transfer Service</h3>
+            </div>
+            <p className="text-xs text-blue-700">
+              This is a free service with 24-hour file retention to keep storage costs manageable for our developers.
+            </p>
+          </div>
+
+          {/* Transfer Details with Countdown */}
+          <div className="bg-gray-50 rounded-lg p-4 mb-6">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">File Transfer Details</h2>
+            
+            {/* Countdown Timer - Prominent Display */}
+            <div className="bg-white border-2 border-dashed border-gray-300 rounded-lg p-4 mb-4 text-center">
+              <div className="text-sm font-medium text-gray-600 mb-1">Time Remaining</div>
+              <div className={`text-2xl font-bold px-3 py-2 rounded-lg inline-block ${getTimeLeftColor()}`}>
+                {timeLeft > 0 ? formatTimeRemaining(timeLeft) : '⚠️ EXPIRED'}
+              </div>
+              {timeLeft > 0 && (
+                <div className="text-xs text-gray-500 mt-2">
+                  Files will be automatically deleted when timer reaches zero
+                </div>
+              )}
+            </div>
+            
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="font-medium text-blue-800">From:</span>
-                <p className="text-blue-700">{transfer.sender_email}</p>
+                <span className="font-medium text-gray-700">Uploaded:</span>
+                <p className="text-gray-600">{formatDate(transfer.created_at)}</p>
               </div>
               <div>
-                <span className="font-medium text-blue-800">To:</span>
-                <p className="text-blue-700">{recipientEmails.join(', ')}</p>
-              </div>
-              <div>
-                <span className="font-medium text-blue-800">Sent:</span>
-                <p className="text-blue-700">{formatDate(transfer.created_at)}</p>
-              </div>
-              <div>
-                <span className="font-medium text-blue-800">Expires:</span>
-                <p className="text-blue-700">
-                  {formatDate(transfer.expires_at)}
-                  {daysLeft > 0 && (
-                    <span className="text-xs ml-2 bg-blue-200 px-2 py-1 rounded">
-                      {daysLeft} day{daysLeft !== 1 ? 's' : ''} left
-                    </span>
-                  )}
-                </p>
+                <span className="font-medium text-gray-700">Expires:</span>
+                <p className="text-gray-600">{formatDate(transfer.expires_at)}</p>
               </div>
             </div>
-            {transfer.message && (
-              <div className="mt-4">
-                <span className="font-medium text-blue-800">Message:</span>
-                <p className="text-blue-700 mt-1 p-2 bg-blue-100 rounded">{transfer.message}</p>
-              </div>
-            )}
           </div>
 
           {/* Files List */}
@@ -199,7 +257,7 @@ export default function DownloadPage() {
               <h2 className="text-lg font-semibold text-gray-900">
                 Files ({files.length})
               </h2>
-              {files.length > 1 && (
+              {files.length > 1 && timeLeft > 0 && (
                 <button
                   onClick={downloadAll}
                   className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 transition-colors"
@@ -208,6 +266,20 @@ export default function DownloadPage() {
                 </button>
               )}
             </div>
+            
+            {timeLeft <= 0 && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                <div className="flex items-center space-x-2">
+                  <span className="text-red-600 text-xl">⚠️</span>
+                  <div>
+                    <h3 className="text-sm font-semibold text-red-800">Transfer Expired</h3>
+                    <p className="text-xs text-red-700">
+                      This transfer has expired and files have been automatically deleted to manage storage costs.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
             
             <div className="space-y-3">
               {files.map((file) => (
@@ -224,10 +296,19 @@ export default function DownloadPage() {
                   </div>
                   <button
                     onClick={() => handleDownload(file)}
-                    disabled={downloadingFiles.has(file.id)}
-                    className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={downloadingFiles.has(file.id) || timeLeft <= 0}
+                    className={`px-4 py-2 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                      timeLeft <= 0 
+                        ? 'bg-gray-400 text-white' 
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
                   >
-                    {downloadingFiles.has(file.id) ? 'Downloading...' : 'Download'}
+                    {timeLeft <= 0 
+                      ? 'Expired' 
+                      : downloadingFiles.has(file.id) 
+                        ? 'Downloading...' 
+                        : 'Download'
+                    }
                   </button>
                 </div>
               ))}
