@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router";
+import { createClient } from "@openauthjs/openauth/client";
 
 export default function AuthCallback() {
   const [searchParams] = useSearchParams();
@@ -36,56 +37,38 @@ export default function AuthCallback() {
           return;
         }
 
-        // Exchange code for token with OpenAuth
-        const tokenResponse = await fetch("https://openauth-template.femivideograph.workers.dev/token", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-          body: new URLSearchParams({
-            grant_type: "authorization_code",
-            code,
-            client_id: "naijasender-webapp",
-            redirect_uri: window.location.origin + "/auth/callback",
-          }),
+        // Use OpenAuth client to exchange the code
+        const authClient = createClient({
+          clientID: "naijasender-webapp",
+          issuer: "https://openauth-template.femivideograph.workers.dev",
         });
 
-        if (tokenResponse.ok) {
-          const tokenData = await tokenResponse.json() as { access_token: string };
-          
-          // Get user info from OpenAuth
-          const userResponse = await fetch("https://openauth-template.femivideograph.workers.dev/userinfo", {
-            headers: {
-              Authorization: `Bearer ${tokenData.access_token}`,
-            },
-          });
-
-          if (userResponse.ok) {
-            const userData = await userResponse.json() as { id: string; email: string };
-            
-            // Store user data
-            localStorage.setItem("auth_user", JSON.stringify(userData));
-            
-            // Mark as processed
-            setProcessed(true);
-            
-            // Redirect to home without reload
-            navigate("/", { replace: true });
-          } else {
-            throw new Error("Failed to get user info");
-          }
-        } else {
-          // Fallback to mock user if token exchange fails
-          console.warn("Token exchange failed, using mock user");
-          const mockUser = {
-            id: `user-${Date.now()}`,
-            email: "user@example.com"
-          };
-          
-          localStorage.setItem("auth_user", JSON.stringify(mockUser));
-          setProcessed(true);
-          navigate("/", { replace: true });
+        const result = await authClient.exchange(code, window.location.origin + "/auth/callback");
+        
+        if (result.err) {
+          throw new Error(`Token exchange failed: ${result.err.message}`);
         }
+
+        // Decode the JWT access token to get user data
+        // The JWT contains user info in its payload
+        const tokenPayload = JSON.parse(atob(result.tokens.access.split('.')[1]));
+        console.log("Token payload:", tokenPayload);
+        
+        const userData = {
+          id: tokenPayload.properties.id,
+          email: tokenPayload.properties.email,
+        };
+        
+        console.log("User data extracted:", userData);
+        
+        // Store user data
+        localStorage.setItem("auth_user", JSON.stringify(userData));
+        
+        // Mark as processed
+        setProcessed(true);
+        
+        // Redirect to home without reload
+        navigate("/", { replace: true });
         
       } catch (error) {
         console.error("Auth callback failed:", error);

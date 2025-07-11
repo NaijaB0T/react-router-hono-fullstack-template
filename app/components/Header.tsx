@@ -25,6 +25,12 @@ export function Header() {
         <div className="flex items-center space-x-3">
           {isAuthenticated ? (
             <>
+              <Link 
+                to="/account"
+                className="text-white hover:opacity-80 transition-opacity px-4 py-2 font-light text-base"
+              >
+                Account
+              </Link>
               <span className="text-white/70 text-sm">
                 {user?.email}
               </span>

@@ -26,6 +26,15 @@ const CompleteTransferSchema = z.object({
   }))
 });
 
+const PaymentInitializeSchema = z.object({
+  amount: z.number().int().min(10000), // Minimum ₦100 in kobo
+  email: z.string().email()
+});
+
+const PaymentVerifySchema = z.object({
+  reference: z.string()
+});
+
 // API Routes
 
 // Create a new transfer
@@ -362,6 +371,234 @@ app.get("/api/file/:transferId/:filename", async (c) => {
     
   } catch (error) {
     console.error('Error downloading file:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Credits and Payment API Routes
+
+// Get user credits
+app.get("/api/credits", async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = authHeader.slice(7);
+    
+    // Get or create user
+    let user = await c.env.DB.prepare(`
+      SELECT * FROM users WHERE id = ?
+    `).bind(userId).first();
+    
+    if (!user) {
+      // Create user if doesn't exist
+      await c.env.DB.prepare(`
+        INSERT INTO users (id, email, credits, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(userId, 'user@example.com', 0, Date.now(), Date.now()).run();
+      
+      user = { id: userId, credits: 0 };
+    }
+    
+    return c.json({ credits: user.credits || 0 });
+    
+  } catch (error) {
+    console.error('Error fetching credits:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Initialize payment with Paystack
+app.post("/api/payments/initialize", async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = authHeader.slice(7);
+    const body = await c.req.json();
+    const validatedData = PaymentInitializeSchema.parse(body);
+    
+    // Create transaction record
+    const transactionId = crypto.randomUUID();
+    const reference = `aroko_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const credits = Math.floor(validatedData.amount / 100); // 1 naira = 1 credit
+    
+    await c.env.DB.prepare(`
+      INSERT INTO transactions (id, user_id, type, amount, credits, description, reference, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      transactionId,
+      userId,
+      'credit',
+      validatedData.amount,
+      credits,
+      `Credit purchase - ${credits} credits`,
+      reference,
+      'pending',
+      Date.now(),
+      Date.now()
+    ).run();
+    
+    // Initialize Paystack payment
+    const paystackResponse = await fetch('https://api.paystack.co/transaction/initialize', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${c.env.PAYSTACK_SECRET_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        email: validatedData.email,
+        amount: validatedData.amount,
+        reference: reference,
+        callback_url: `${c.env.BASE_URL}/account?payment=success`,
+        metadata: {
+          userId: userId,
+          transactionId: transactionId,
+          credits: credits
+        }
+      })
+    });
+    
+    if (!paystackResponse.ok) {
+      throw new Error('Paystack initialization failed');
+    }
+    
+    const paystackData = await paystackResponse.json();
+    
+    // Create payment record
+    await c.env.DB.prepare(`
+      INSERT INTO payments (id, user_id, transaction_id, paystack_reference, amount, status, paystack_response, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      userId,
+      transactionId,
+      reference,
+      validatedData.amount,
+      'pending',
+      JSON.stringify(paystackData),
+      Date.now(),
+      Date.now()
+    ).run();
+    
+    return c.json(paystackData);
+    
+  } catch (error) {
+    console.error('Error initializing payment:', error);
+    if (error instanceof z.ZodError) {
+      return c.json({ error: 'Invalid request data', details: error.errors }, 400);
+    }
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Verify payment (webhook and manual verification)
+app.post("/api/payments/verify", async (c) => {
+  try {
+    const body = await c.req.json();
+    const validatedData = PaymentVerifySchema.parse(body);
+    
+    // Verify with Paystack
+    const paystackResponse = await fetch(`https://api.paystack.co/transaction/verify/${validatedData.reference}`, {
+      headers: {
+        'Authorization': `Bearer ${c.env.PAYSTACK_SECRET_KEY}`
+      }
+    });
+    
+    if (!paystackResponse.ok) {
+      throw new Error('Paystack verification failed');
+    }
+    
+    const paystackData = await paystackResponse.json();
+    
+    if (paystackData.status && paystackData.data.status === 'success') {
+      // Get transaction
+      const transaction = await c.env.DB.prepare(`
+        SELECT * FROM transactions WHERE reference = ?
+      `).bind(validatedData.reference).first();
+      
+      if (!transaction) {
+        return c.json({ error: 'Transaction not found' }, 404);
+      }
+      
+      // Update transaction status
+      await c.env.DB.prepare(`
+        UPDATE transactions SET status = 'success', updated_at = ? WHERE id = ?
+      `).bind(Date.now(), transaction.id).run();
+      
+      // Update payment status
+      await c.env.DB.prepare(`
+        UPDATE payments SET status = 'success', paystack_response = ?, updated_at = ? WHERE paystack_reference = ?
+      `).bind(JSON.stringify(paystackData), Date.now(), validatedData.reference).run();
+      
+      // Add credits to user account
+      await c.env.DB.prepare(`
+        UPDATE users SET credits = credits + ?, updated_at = ? WHERE id = ?
+      `).bind(transaction.credits, Date.now(), transaction.user_id).run();
+      
+      return c.json({ status: 'success', credits_added: transaction.credits });
+    } else {
+      // Payment failed
+      await c.env.DB.prepare(`
+        UPDATE transactions SET status = 'failed', updated_at = ? WHERE reference = ?
+      `).bind(Date.now(), validatedData.reference).run();
+      
+      await c.env.DB.prepare(`
+        UPDATE payments SET status = 'failed', paystack_response = ?, updated_at = ? WHERE paystack_reference = ?
+      `).bind(JSON.stringify(paystackData), Date.now(), validatedData.reference).run();
+      
+      return c.json({ status: 'failed', message: 'Payment verification failed' });
+    }
+    
+  } catch (error) {
+    console.error('Error verifying payment:', error);
+    if (error instanceof z.ZodError) {
+      return c.json({ error: 'Invalid request data', details: error.errors }, 400);
+    }
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Paystack webhook
+app.post("/api/webhooks/paystack", async (c) => {
+  try {
+    const body = await c.req.text();
+    const signature = c.req.header('x-paystack-signature');
+    
+    // Verify webhook signature
+    const hash = await crypto.subtle.digest(
+      'SHA-512',
+      new TextEncoder().encode(c.env.PAYSTACK_SECRET_KEY + body)
+    );
+    const expectedSignature = Array.from(new Uint8Array(hash))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+    
+    if (signature !== expectedSignature) {
+      return c.json({ error: 'Invalid signature' }, 400);
+    }
+    
+    const event = JSON.parse(body);
+    
+    if (event.event === 'charge.success') {
+      const reference = event.data.reference;
+      
+      // Verify and process payment
+      await fetch(`${c.env.BASE_URL}/api/payments/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference })
+      });
+    }
+    
+    return c.json({ status: 'success' });
+    
+  } catch (error) {
+    console.error('Error processing webhook:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
