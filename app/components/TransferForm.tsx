@@ -200,9 +200,48 @@ export function TransferForm() {
     const uploadParts = [...(fileInfo.uploadedParts || [])];
     const startPart = (fileInfo.currentPart || 0) + 1;
 
+    // Track real-time progress for each chunk
+    const chunkProgress = new Map<number, number>(); // partNumber -> bytes uploaded
+    const chunkSizes = new Map<number, number>(); // partNumber -> total chunk size
+
     // Create abort controller for this file
     const abortController = new AbortController();
     abortControllersRef.current.set(fileInfo.id, abortController);
+
+    // Function to update real-time progress
+    const updateRealTimeProgress = () => {
+      // Calculate total bytes uploaded (completed chunks + partial progress)
+      let totalBytesUploaded = 0;
+      
+      // Add bytes from completed chunks
+      for (const part of uploadParts) {
+        const chunkSize = Math.min(CHUNK_SIZE, file.size - (part.partNumber - 1) * CHUNK_SIZE);
+        totalBytesUploaded += chunkSize;
+      }
+      
+      // Add partial progress from currently uploading chunks
+      for (const [partNumber, bytesUploaded] of chunkProgress) {
+        // Only count if this chunk isn't already completed
+        if (!uploadParts.find(p => p.partNumber === partNumber)) {
+          totalBytesUploaded += bytesUploaded;
+        }
+      }
+      
+      const progress = Math.min(Math.round((totalBytesUploaded / file.size) * 100), 100);
+      
+      setFormData(prev => ({
+        ...prev,
+        files: prev.files.map(f => 
+          f.id === fileInfo.id ? { 
+            ...f, 
+            progress,
+            uploadedParts: [...uploadParts],
+            currentPart: uploadParts.length > 0 ? Math.max(...uploadParts.map(p => p.partNumber)) : 0,
+            status: 'uploading' as const
+          } : f
+        )
+      }));
+    };
 
     const uploadChunkWithRetry = async (partNumber: number, chunk: Blob, retryCount = 0): Promise<{ partNumber: number; etag: string }> => {
       // Check if upload is paused
@@ -216,25 +255,69 @@ export function TransferForm() {
       }
 
       try {
-        const chunkFormData = new FormData();
-        chunkFormData.append('key', fileData.key);
-        chunkFormData.append('uploadId', fileData.uploadId);
-        chunkFormData.append('partNumber', partNumber.toString());
-        chunkFormData.append('chunk', chunk);
+        // Store chunk size for progress calculation
+        chunkSizes.set(partNumber, chunk.size);
+        chunkProgress.set(partNumber, 0);
 
-        const uploadResponse = await fetch('/api/uploads/chunk', {
-          method: 'POST',
-          body: chunkFormData,
-          signal: abortController.signal
+        return await new Promise<{ partNumber: number; etag: string }>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          
+          // Set up progress tracking
+          xhr.upload.addEventListener('progress', (event) => {
+            if (event.lengthComputable) {
+              chunkProgress.set(partNumber, event.loaded);
+              updateRealTimeProgress();
+            }
+          });
+
+          // Handle completion
+          xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                const result = JSON.parse(xhr.responseText);
+                // Mark this chunk as fully uploaded
+                chunkProgress.delete(partNumber);
+                resolve(result);
+              } catch (e) {
+                reject(new Error('Invalid JSON response'));
+              }
+            } else {
+              reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
+            }
+          });
+
+          // Handle errors
+          xhr.addEventListener('error', () => {
+            chunkProgress.delete(partNumber);
+            reject(new Error('Network error'));
+          });
+
+          xhr.addEventListener('abort', () => {
+            chunkProgress.delete(partNumber);
+            reject(new Error('Upload cancelled'));
+          });
+
+          // Handle abort controller
+          abortController.signal.addEventListener('abort', () => {
+            xhr.abort();
+          });
+
+          // Prepare form data
+          const chunkFormData = new FormData();
+          chunkFormData.append('key', fileData.key);
+          chunkFormData.append('uploadId', fileData.uploadId);
+          chunkFormData.append('partNumber', partNumber.toString());
+          chunkFormData.append('chunk', chunk);
+
+          // Start upload
+          xhr.open('POST', '/api/uploads/chunk');
+          xhr.send(chunkFormData);
         });
 
-        if (!uploadResponse.ok) {
-          throw new Error(`HTTP ${uploadResponse.status}: ${uploadResponse.statusText}`);
-        }
-
-        return await uploadResponse.json() as { partNumber: number; etag: string };
       } catch (error) {
-        if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Upload paused')) {
+        chunkProgress.delete(partNumber);
+        
+        if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Upload paused' || error.message === 'Upload cancelled')) {
           throw error;
         }
 
@@ -265,7 +348,10 @@ export function TransferForm() {
     };
 
     let newPartsUploaded = 0;
-    let completedParts = 0;
+    let completedParts = uploadParts.length; // Start with already completed parts
+    
+    // Set initial progress based on already completed chunks
+    updateRealTimeProgress();
     
     try {
       // Create tasks for all parts that need to be uploaded
@@ -274,8 +360,7 @@ export function TransferForm() {
       for (let partNumber = startPart; partNumber <= chunks; partNumber++) {
         // Check if this part was already uploaded
         if (uploadParts.find(p => p.partNumber === partNumber)) {
-          completedParts++;
-          continue;
+          continue; // Skip already completed parts
         }
 
         const start = (partNumber - 1) * CHUNK_SIZE;
@@ -294,20 +379,8 @@ export function TransferForm() {
           newPartsUploaded++;
           completedParts++;
 
-          // Update progress in real-time
-          const progress = Math.round((completedParts / chunks) * 100);
-          setFormData(prev => ({
-            ...prev,
-            files: prev.files.map(f => 
-              f.id === fileInfo.id ? { 
-                ...f, 
-                progress,
-                uploadedParts: [...uploadParts], // Create new array to trigger re-render
-                currentPart: Math.max(...uploadParts.map(p => p.partNumber)),
-                status: 'uploading' as const
-              } : f
-            )
-          }));
+          // Update progress one final time for this completed chunk
+          updateRealTimeProgress();
 
           // Save state after each successful chunk
           saveUploadState({ transferId, formData });
@@ -359,6 +432,9 @@ export function TransferForm() {
       }));
       throw error;
     } finally {
+      // Clean up progress tracking
+      chunkProgress.clear();
+      chunkSizes.clear();
       abortControllersRef.current.delete(fileInfo.id);
     }
   };
