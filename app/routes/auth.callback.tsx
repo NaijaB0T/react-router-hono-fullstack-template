@@ -37,9 +37,13 @@ export default function AuthCallback() {
           return;
         }
 
+        // Get client ID based on environment
+        const isProduction = window.location.hostname !== "localhost";
+        const clientID = isProduction ? "naijasender-webapp-prod" : "naijasender-webapp";
+        
         // Use OpenAuth client to exchange the code
         const authClient = createClient({
-          clientID: "naijasender-webapp",
+          clientID,
           issuer: "https://openauth-template.femivideograph.workers.dev",
         });
 

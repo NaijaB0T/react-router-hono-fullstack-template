@@ -2,6 +2,12 @@ import { createContext, useContext, useEffect, useState } from "react";
 
 const AUTH_BASE_URL = "https://openauth-template.femivideograph.workers.dev";
 
+// Get client ID based on environment
+const getClientId = () => {
+  const isProduction = typeof window !== "undefined" && window.location.hostname !== "localhost";
+  return isProduction ? "naijasender-webapp-prod" : "naijasender-webapp";
+};
+
 interface AuthUser {
   id: string;
   email: string;
@@ -45,7 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = () => {
     // Redirect to OpenAuth login
     const authUrl = new URL(`${AUTH_BASE_URL}/password/authorize`);
-    authUrl.searchParams.set("client_id", "naijasender-webapp");
+    authUrl.searchParams.set("client_id", getClientId());
     authUrl.searchParams.set("redirect_uri", window.location.origin + "/auth/callback");
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("state", "login");
@@ -56,7 +62,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = () => {
     // Redirect to OpenAuth registration
     const authUrl = new URL(`${AUTH_BASE_URL}/password/register`);
-    authUrl.searchParams.set("client_id", "naijasender-webapp");
+    authUrl.searchParams.set("client_id", getClientId());
     authUrl.searchParams.set("redirect_uri", window.location.origin + "/auth/callback");
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("state", "register");
