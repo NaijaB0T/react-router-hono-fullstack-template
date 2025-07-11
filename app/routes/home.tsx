@@ -5,8 +5,8 @@ import { Header } from "../components/Header";
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "Aroko - Ancient Way of Sending Files" },
-    { name: "description", content: "Send large files quickly and securely with Aroko - the modern way to share, inspired by ancient Yoruba messaging traditions" },
+    { title: "Aroko - Ancient Yoruba Way of Sending Files" },
+    { name: "description", content: "Send large files with the ancient Yoruba way of messaging. Pay-as-you-use storage from ₦60/month or ₦2/day. Free transfers included!" },
   ];
 }
 
@@ -30,31 +30,43 @@ export default function Home() {
 
             {/* Right side - Headline and CTA */}
             <div className="order-1 lg:order-2 lg:col-span-2 text-center lg:text-left lg:pl-8">
-              <h1 className="text-3xl md:text-5xl lg:text-6xl font-serif font-bold text-white mb-6 leading-tight">
-                Need to send big files?
+              <h1 className="text-3xl md:text-5xl lg:text-6xl font-serif font-bold text-white mb-4 leading-tight">
+                Store & Send Big Files
               </h1>
+              <h2 className="text-xl md:text-2xl lg:text-3xl font-light text-white mb-6 opacity-90">
+                Pay only for what you use
+              </h2>
               
-              <button className="bg-black text-white px-6 py-3 rounded-lg text-lg font-semibold hover:bg-gray-900 transition-colors font-light">
-                Go Ultimate Now
-              </button>
+              {/* Pricing highlight */}
+              <div className="bg-black bg-opacity-80 backdrop-blur-sm rounded-xl p-4 mb-6 border border-gray-600">
+                <div className="text-center">
+                  <div className="text-2xl font-bold text-white mb-2">Store 1GB for ₦60/month</div>
+                  <div className="text-sm text-gray-300 font-light">Or pay ₦2 per day as you use</div>
+                </div>
+              </div>
+              
+              <div className="space-y-3 mb-6">
+                <button className="w-full lg:w-auto bg-green-600 text-white px-8 py-3 rounded-lg text-lg font-semibold hover:bg-green-700 transition-colors font-light">
+                  Start Storing Files
+                </button>
+                <div className="text-center lg:text-left">
+                  <span className="text-white text-sm opacity-80 font-light">Free transfers included</span>
+                </div>
+              </div>
               
               {/* Feature highlights */}
-              <div className="mt-8 space-y-3 text-white opacity-90 text-sm">
+              <div className="mt-6 space-y-3 text-white opacity-90 text-sm">
                 <div className="flex items-center justify-center lg:justify-start space-x-2">
-                  <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
-                  <span className="font-light">Up to 15GB per transfer</span>
+                  <div className="w-1.5 h-1.5 bg-green-400 rounded-full"></div>
+                  <span className="font-light">Pay-as-you-use pricing</span>
                 </div>
                 <div className="flex items-center justify-center lg:justify-start space-x-2">
-                  <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
-                  <span className="font-light">Files expire after 24 hours</span>
+                  <div className="w-1.5 h-1.5 bg-green-400 rounded-full"></div>
+                  <span className="font-light">Free file transfers (24hr expiry)</span>
                 </div>
                 <div className="flex items-center justify-center lg:justify-start space-x-2">
-                  <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
-                  <span className="font-light">100% free to use</span>
-                </div>
-                <div className="flex items-center justify-center lg:justify-start space-x-2">
-                  <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
-                  <span className="font-light">Real-time progress tracking</span>
+                  <div className="w-1.5 h-1.5 bg-green-400 rounded-full"></div>
+                  <span className="font-light">Long-term storage available</span>
                 </div>
               </div>
             </div>

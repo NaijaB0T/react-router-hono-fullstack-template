@@ -11,10 +11,10 @@ export function Header() {
         
         {/* Navigation */}
         <nav className="hidden md:flex items-center space-x-8 text-white text-base">
-          <a href="#" className="hover:opacity-80 transition-opacity font-light">Features</a>
+          <a href="#" className="hover:opacity-80 transition-opacity font-light">Storage</a>
           <a href="#" className="hover:opacity-80 transition-opacity font-light">Pricing</a>
-          <a href="#" className="hover:opacity-80 transition-opacity font-light">Use cases</a>
-          <a href="#" className="hover:opacity-80 transition-opacity font-light">Resources</a>
+          <a href="#" className="hover:opacity-80 transition-opacity font-light">Transfer</a>
+          <a href="#" className="hover:opacity-80 transition-opacity font-light">Help</a>
         </nav>
         
         {/* Auth buttons */}
@@ -22,8 +22,8 @@ export function Header() {
           <button className="text-white hover:opacity-80 transition-opacity px-4 py-2 font-light text-base">
             Log in
           </button>
-          <button className="bg-black text-white px-6 py-2 rounded-lg hover:bg-gray-900 transition-colors font-light text-base">
-            Sign up
+          <button className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors font-light text-base">
+            Start Storing
           </button>
         </div>
       </div>

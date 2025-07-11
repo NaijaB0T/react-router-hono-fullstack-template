@@ -223,10 +223,10 @@ export default function DownloadPage() {
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
             <div className="flex items-center space-x-2 mb-1">
               <span className="text-blue-600 text-base">🆓</span>
-              <h3 className="text-xs font-semibold text-blue-800">Free File Transfer Service</h3>
+              <h3 className="text-xs font-semibold text-blue-800">Free Transfer • Paid Storage Available</h3>
             </div>
             <p className="text-sm text-blue-700 font-light">
-              This is a free service with 24-hour file retention to keep storage costs manageable for our developers.
+              Free transfers expire in 24 hours. Need longer storage? Just ₦60/month for 1GB or ₦2/day pay-as-you-use.
             </p>
           </div>
 
@@ -325,6 +325,13 @@ export default function DownloadPage() {
 
               {/* Footer */}
               <div className="text-center pt-4 border-t border-gray-200">
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
+                  <p className="text-xs font-semibold text-green-800 mb-1">Need longer storage?</p>
+                  <p className="text-xs text-green-700 font-light mb-2">Store files for as long as you need with pay-as-you-use pricing</p>
+                  <button className="bg-green-600 text-white px-4 py-1.5 rounded text-xs hover:bg-green-700 transition-colors">
+                    Upgrade Storage - ₦60/month
+                  </button>
+                </div>
                 <p className="text-gray-400 text-sm mb-2 font-light">
                   Created and Funded by <a href="https://femitaofeeq.com" target="_blank" rel="noopener noreferrer" className="hover:text-gray-600 transition-colors">Femi Taofeeq</a>
                 </p>
@@ -332,7 +339,7 @@ export default function DownloadPage() {
                   href="/" 
                   className="text-blue-600 hover:text-blue-800 text-sm font-light"
                 >
-                  Create your own transfer
+                  Send another file
                 </a>
               </div>
             </div>
