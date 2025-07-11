@@ -891,83 +891,60 @@ export function TransferForm() {
 
   if (uploadComplete) {
     return (
-      <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-lg p-6">
-        <div className="text-center">
-          <div className="text-green-500 text-6xl mb-4">✅</div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-4">Transfer Complete!</h2>
-          
+      <div className="text-center">
+        <div className="text-green-500 text-4xl mb-3">✅</div>
+        <h2 className="text-xl font-bold text-gray-900 mb-4">Transfer Complete!</h2>
+        
 
-          {/* Download Link */}
-          <div className="bg-gray-50 rounded-lg p-4 mb-6">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Download Link
-            </label>
-            <div className="flex items-center space-x-2">
-              <input
-                type="text"
-                value={downloadUrl}
-                readOnly
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-white text-sm"
-              />
-              <button
-                type="button"
-                onClick={copyToClipboard}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
-              >
-                Copy
-              </button>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              This link will expire in 24 hours
-            </p>
-          </div>
-
-          {/* Actions */}
-          <div className="space-y-3">
-            <a
-              href={downloadUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block w-full bg-green-600 text-white py-3 px-4 rounded-md hover:bg-green-700 transition-colors"
-            >
-              View Download Page
-            </a>
+        {/* Download Link */}
+        <div className="bg-gray-50 rounded-lg p-4 mb-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Download Link
+          </label>
+          <div className="flex items-center space-x-2">
+            <input
+              type="text"
+              value={downloadUrl}
+              readOnly
+              className="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-white text-sm"
+            />
             <button
               type="button"
-              onClick={resetForm}
-              className="block w-full bg-gray-600 text-white py-3 px-4 rounded-md hover:bg-gray-700 transition-colors"
+              onClick={copyToClipboard}
+              className="px-3 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
             >
-              Send Another Transfer
+              Copy
             </button>
           </div>
+          <p className="text-xs text-gray-500 mt-2">
+            This link will expire in 24 hours
+          </p>
+        </div>
+
+        {/* Actions */}
+        <div className="space-y-2">
+          <a
+            href={downloadUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block w-full bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700 transition-colors text-sm"
+          >
+            View Download Page
+          </a>
+          <button
+            type="button"
+            onClick={resetForm}
+            className="block w-full bg-gray-600 text-white py-2 px-4 rounded-md hover:bg-gray-700 transition-colors text-sm"
+          >
+            Send Another Transfer
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="max-w-2xl mx-auto bg-white rounded-lg shadow-lg p-6">
-      {/* Service Information */}
-      <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-        <div className="flex items-start space-x-3">
-          <div className="text-green-600 text-xl">🆓</div>
-          <div>
-            <h3 className="text-sm font-semibold text-green-800 mb-1">Free File Transfer Service</h3>
-            <p className="text-xs text-green-700 mb-2">
-              Upload up to <strong>15GB per file</strong> completely free! Files are automatically deleted after <strong>24 hours</strong> to keep storage costs manageable for our developers.
-            </p>
-            <p className="text-xs text-green-600 mb-2">
-              This service is provided free of charge. The short duration helps us maintain sustainable hosting costs while serving the community.
-            </p>
-            <div className="bg-blue-100 border border-blue-200 rounded p-2 mt-2">
-              <p className="text-xs text-blue-700">
-                <strong>💡 Resume Tip:</strong> You can pause and resume uploads while staying on this page. 
-                If you refresh or close the browser, files will need to be re-selected for a fresh upload.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
+    <div className="space-y-6">
 
       {/* Resume Notification */}
       {showResumeNotification && (
@@ -1016,36 +993,47 @@ export function TransferForm() {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* File Upload Area */}
+        {/* File Upload Area - Simplified */}
         <div className="space-y-4">
-          <label className="block text-sm font-medium text-gray-700">
-            Select Files
-          </label>
-          <div
-            className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
-              isDragOver
-                ? 'border-blue-500 bg-blue-50'
-                : 'border-gray-300 hover:border-gray-400'
-            }`}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <div className="space-y-2">
-              <div className="text-gray-600">
-                <p className="text-lg">Drop files here or click to select</p>
-                <p className="text-sm">Multiple files are supported • Max 15GB per file</p>
-                <p className="text-xs text-gray-500 mt-2">Files expire automatically after 24 hours</p>
+          <div className="grid grid-cols-2 gap-4">
+            {/* Add files button */}
+            <div
+              className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 ${
+                isDragOver
+                  ? 'border-blue-500 bg-blue-50 scale-105'
+                  : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
+              }`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <div className="space-y-3">
+                <div className="text-4xl">📄</div>
+                <div>
+                  <p className="font-semibold text-gray-900">+ Add files</p>
+                  <p className="text-xs text-gray-500 mt-1">Up to 15GB</p>
+                </div>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                onChange={handleFileInputChange}
+                className="hidden"
+              />
+            </div>
+
+            {/* Add folder button */}
+            <div className="border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-200 border-gray-300 hover:border-blue-400 hover:bg-gray-50 opacity-50">
+              <div className="space-y-3">
+                <div className="text-4xl">📁</div>
+                <div>
+                  <p className="font-semibold text-gray-900">+ Add folders</p>
+                  <p className="text-xs text-gray-500 mt-1">Coming soon</p>
+                </div>
               </div>
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              onChange={handleFileInputChange}
-              className="hidden"
-            />
           </div>
         </div>
 
@@ -1192,17 +1180,18 @@ export function TransferForm() {
           </div>
         )}
 
+
         {/* Submit Button */}
         <button
           type="submit"
           disabled={!isFormValid() || isUploading}
-          className={`w-full py-3 px-4 rounded-md font-medium text-white transition-colors ${
+          className={`w-full py-4 px-6 rounded-xl font-semibold text-white transition-all duration-200 ${
             !isFormValid() || isUploading
               ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500'
+              : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-200 transform hover:scale-[1.02]'
           }`}
         >
-          {isUploading ? 'Uploading...' : 'Upload Files'}
+          {isUploading ? 'Uploading...' : 'Transfer'}
         </button>
       </form>
     </div>
