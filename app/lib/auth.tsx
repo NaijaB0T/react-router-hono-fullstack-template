@@ -24,14 +24,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkAuth = async () => {
     try {
-      // Check if we have user data in localStorage
-      const userData = localStorage.getItem("auth_user");
-      if (userData) {
-        setUser(JSON.parse(userData));
+      // Only check localStorage in the browser
+      if (typeof window !== "undefined") {
+        const userData = localStorage.getItem("auth_user");
+        if (userData) {
+          setUser(JSON.parse(userData));
+        }
       }
     } catch (error) {
       console.error("Auth check failed:", error);
-      localStorage.removeItem("auth_user");
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("auth_user");
+      }
       setUser(null);
     } finally {
       setLoading(false);
@@ -40,7 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = () => {
     // Redirect to OpenAuth login
-    const authUrl = new URL(`${AUTH_BASE_URL}/authorize`);
+    const authUrl = new URL(`${AUTH_BASE_URL}/password/authorize`);
     authUrl.searchParams.set("client_id", "naijasender-webapp");
     authUrl.searchParams.set("redirect_uri", window.location.origin + "/auth/callback");
     authUrl.searchParams.set("response_type", "code");
@@ -51,7 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const register = () => {
     // Redirect to OpenAuth registration
-    const authUrl = new URL(`${AUTH_BASE_URL}/authorize`);
+    const authUrl = new URL(`${AUTH_BASE_URL}/password/register`);
     authUrl.searchParams.set("client_id", "naijasender-webapp");
     authUrl.searchParams.set("redirect_uri", window.location.origin + "/auth/callback");
     authUrl.searchParams.set("response_type", "code");
@@ -61,7 +65,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
-    localStorage.removeItem("auth_user");
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("auth_user");
+    }
     setUser(null);
   };
 
@@ -73,6 +79,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     checkAuth();
+    
+    // Listen for storage changes (including from other tabs or manual updates)
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'auth_user') {
+        if (e.newValue) {
+          try {
+            setUser(JSON.parse(e.newValue));
+          } catch (error) {
+            console.error('Error parsing user data from storage:', error);
+            setUser(null);
+          }
+        } else {
+          setUser(null);
+        }
+      }
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener('storage', handleStorageChange);
+      return () => window.removeEventListener('storage', handleStorageChange);
+    }
   }, []);
 
   const value: AuthContextType = {

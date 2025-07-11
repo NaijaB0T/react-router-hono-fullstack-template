@@ -35,6 +35,11 @@ const PaymentVerifySchema = z.object({
   reference: z.string()
 });
 
+const ExtendFileSchema = z.object({
+  fileId: z.string(),
+  days: z.number().int().min(1).max(365) // Max 1 year extension
+});
+
 // API Routes
 
 // Create a new transfer
@@ -47,6 +52,11 @@ app.post("/api/transfers", async (c) => {
     console.log('Validating data...');
     const validatedData = CreateTransferSchema.parse(body);
     console.log('Validation successful');
+    
+    // Check if user is authenticated
+    const authHeader = c.req.header('Authorization');
+    const userId = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const isAuthenticated = !!userId;
     
     const transferId = crypto.randomUUID();
     const expiresAt = Date.now() + (24 * 60 * 60 * 1000); // 24 hours from now
@@ -114,17 +124,34 @@ app.post("/api/transfers", async (c) => {
       const multipartUpload = await c.env.FILE_BUCKET.createMultipartUpload(r2Key);
       console.log('Multipart upload created, ID:', multipartUpload.uploadId);
       
-      // Insert file record
-      await c.env.DB.prepare(`
-        INSERT INTO files (id, transfer_id, filename, filesize, r2_object_key)
-        VALUES (?, ?, ?, ?, ?)
-      `).bind(
-        fileId,
-        transferId,
-        fileData.filename,
-        fileData.filesize,
-        r2Key
-      ).run();
+      // Insert file record with user association if authenticated
+      if (isAuthenticated) {
+        await c.env.DB.prepare(`
+          INSERT INTO files (id, transfer_id, filename, filesize, r2_object_key, user_id, is_managed, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          fileId,
+          transferId,
+          fileData.filename,
+          fileData.filesize,
+          r2Key,
+          userId,
+          1, // Mark as managed
+          createdAt
+        ).run();
+      } else {
+        await c.env.DB.prepare(`
+          INSERT INTO files (id, transfer_id, filename, filesize, r2_object_key, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(
+          fileId,
+          transferId,
+          fileData.filename,
+          fileData.filesize,
+          r2Key,
+          createdAt
+        ).run();
+      }
       
       console.log('File record inserted for:', fileData.filename);
       
@@ -375,6 +402,240 @@ app.get("/api/file/:transferId/:filename", async (c) => {
   }
 });
 
+// File Management API Routes
+
+// Calculate extension cost based on file size and days
+function calculateExtensionCost(fileSizeBytes: number, days: number): number {
+  const fileSizeGB = fileSizeBytes / (1024 * 1024 * 1024); // Convert bytes to GB
+  const costPerGBPerDay = 2; // ₦2 per GB per day
+  return Math.ceil(fileSizeGB * days * costPerGBPerDay); // Round up to nearest naira
+}
+
+// Get user's managed files
+app.get("/api/files", async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = authHeader.slice(7);
+    
+    // Get user's managed files
+    const files = await c.env.DB.prepare(`
+      SELECT f.*, t.status as transfer_status, t.created_at as transfer_created_at
+      FROM files f
+      LEFT JOIN transfers t ON f.transfer_id = t.id
+      WHERE f.user_id = ? AND f.is_managed = 1
+      ORDER BY f.created_at DESC
+    `).bind(userId).all();
+    
+    return c.json({ 
+      files: files.results?.map(file => ({
+        ...file,
+        // Calculate current expiry (either original 24h or extended)
+        current_expiry: file.extended_until || (file.transfer_created_at + (24 * 60 * 60 * 1000)),
+        // Calculate if file is expired
+        is_expired: (file.extended_until || (file.transfer_created_at + (24 * 60 * 60 * 1000))) < Date.now(),
+        // Calculate extension cost for 1 day
+        extension_cost_per_day: calculateExtensionCost(file.filesize, 1)
+      })) || []
+    });
+    
+  } catch (error) {
+    console.error('Error fetching user files:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Extend file expiry
+app.post("/api/files/extend", async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = authHeader.slice(7);
+    const body = await c.req.json();
+    const validatedData = ExtendFileSchema.parse(body);
+    
+    // Get file details
+    const file = await c.env.DB.prepare(`
+      SELECT f.*, t.created_at as transfer_created_at
+      FROM files f
+      LEFT JOIN transfers t ON f.transfer_id = t.id
+      WHERE f.id = ? AND f.user_id = ? AND f.is_managed = 1
+    `).bind(validatedData.fileId, userId).first();
+    
+    if (!file) {
+      return c.json({ error: 'File not found or not accessible' }, 404);
+    }
+    
+    // Calculate extension cost
+    const extensionCost = calculateExtensionCost(file.filesize, validatedData.days);
+    
+    // Check user's credit balance
+    const user = await c.env.DB.prepare(`
+      SELECT credits FROM users WHERE id = ?
+    `).bind(userId).first();
+    
+    if (!user || user.credits < extensionCost) {
+      return c.json({ 
+        error: 'Insufficient credits',
+        required_credits: extensionCost,
+        current_credits: user?.credits || 0
+      }, 400);
+    }
+    
+    // Calculate new expiry date
+    const currentExpiry = file.extended_until || (file.transfer_created_at + (24 * 60 * 60 * 1000));
+    const newExpiry = Math.max(currentExpiry, Date.now()) + (validatedData.days * 24 * 60 * 60 * 1000);
+    
+    // Start transaction
+    const extensionId = crypto.randomUUID();
+    const now = Date.now();
+    
+    // Deduct credits from user
+    await c.env.DB.prepare(`
+      UPDATE users SET credits = credits - ?, updated_at = ? WHERE id = ?
+    `).bind(extensionCost, now, userId).run();
+    
+    // Update file expiry
+    await c.env.DB.prepare(`
+      UPDATE files SET 
+        extended_until = ?,
+        total_extensions = total_extensions + 1,
+        total_extension_cost = total_extension_cost + ?
+      WHERE id = ?
+    `).bind(newExpiry, extensionCost, validatedData.fileId).run();
+    
+    // Record extension transaction
+    await c.env.DB.prepare(`
+      INSERT INTO transactions (id, user_id, type, amount, credits, description, reference, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      userId,
+      'debit',
+      extensionCost * 100, // Convert to kobo for consistency
+      -extensionCost,
+      `File extension - ${file.filename} for ${validatedData.days} day(s)`,
+      `extension_${extensionId}`,
+      'success',
+      now,
+      now
+    ).run();
+    
+    // Record extension history
+    await c.env.DB.prepare(`
+      INSERT INTO file_extensions (id, file_id, user_id, days_extended, cost_in_credits, new_expiry_date, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      extensionId,
+      validatedData.fileId,
+      userId,
+      validatedData.days,
+      extensionCost,
+      newExpiry,
+      now
+    ).run();
+    
+    return c.json({ 
+      success: true,
+      new_expiry: newExpiry,
+      cost_paid: extensionCost,
+      remaining_credits: user.credits - extensionCost
+    });
+    
+  } catch (error) {
+    console.error('Error extending file:', error);
+    if (error instanceof z.ZodError) {
+      return c.json({ error: 'Invalid request data', details: error.errors }, 400);
+    }
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Delete managed file
+app.delete("/api/files/:fileId", async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = authHeader.slice(7);
+    const fileId = c.req.param('fileId');
+    
+    // Get file details
+    const file = await c.env.DB.prepare(`
+      SELECT * FROM files WHERE id = ? AND user_id = ? AND is_managed = 1
+    `).bind(fileId, userId).first();
+    
+    if (!file) {
+      return c.json({ error: 'File not found or not accessible' }, 404);
+    }
+    
+    // Delete file from R2
+    if (file.r2_object_key) {
+      try {
+        await c.env.FILE_BUCKET.delete(file.r2_object_key);
+      } catch (error) {
+        console.error('Error deleting file from R2:', error);
+      }
+    }
+    
+    // Delete file record and associated extensions
+    await c.env.DB.prepare(`
+      DELETE FROM file_extensions WHERE file_id = ?
+    `).bind(fileId).run();
+    
+    await c.env.DB.prepare(`
+      DELETE FROM files WHERE id = ?
+    `).bind(fileId).run();
+    
+    return c.json({ success: true });
+    
+  } catch (error) {
+    console.error('Error deleting file:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Get file extension history
+app.get("/api/files/:fileId/extensions", async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = authHeader.slice(7);
+    const fileId = c.req.param('fileId');
+    
+    // Verify file ownership
+    const file = await c.env.DB.prepare(`
+      SELECT id FROM files WHERE id = ? AND user_id = ? AND is_managed = 1
+    `).bind(fileId, userId).first();
+    
+    if (!file) {
+      return c.json({ error: 'File not found or not accessible' }, 404);
+    }
+    
+    // Get extension history
+    const extensions = await c.env.DB.prepare(`
+      SELECT * FROM file_extensions WHERE file_id = ? ORDER BY created_at DESC
+    `).bind(fileId).all();
+    
+    return c.json({ extensions: extensions.results || [] });
+    
+  } catch (error) {
+    console.error('Error fetching file extensions:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 // Credits and Payment API Routes
 
 // Get user credits
@@ -410,6 +671,65 @@ app.get("/api/credits", async (c) => {
   }
 });
 
+// Get user transactions
+app.get("/api/transactions", async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = authHeader.slice(7);
+    
+    // Get recent transactions with pagination
+    const limit = parseInt(c.req.query('limit') || '10');
+    const offset = parseInt(c.req.query('offset') || '0');
+    
+    const transactions = await c.env.DB.prepare(`
+      SELECT id, type, amount, credits, description, status, created_at, updated_at
+      FROM transactions 
+      WHERE user_id = ? 
+      ORDER BY created_at DESC 
+      LIMIT ? OFFSET ?
+    `).bind(userId, limit, offset).all();
+    
+    return c.json({ 
+      transactions: transactions.results,
+      total: transactions.results.length
+    });
+    
+  } catch (error) {
+    console.error('Error fetching transactions:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Debug endpoint to check recent transactions for a user
+app.get("/api/transactions/debug", async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    
+    const userId = authHeader.slice(7);
+    
+    // Get recent transactions
+    const transactions = await c.env.DB.prepare(`
+      SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 10
+    `).bind(userId).all();
+    
+    return c.json({ 
+      userId,
+      transactions: transactions.results 
+    });
+    
+  } catch (error) {
+    console.error('Error fetching transactions:', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 // Initialize payment with Paystack
 app.post("/api/payments/initialize", async (c) => {
   try {
@@ -425,7 +745,7 @@ app.post("/api/payments/initialize", async (c) => {
     // Create transaction record
     const transactionId = crypto.randomUUID();
     const reference = `aroko_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const credits = Math.floor(validatedData.amount / 100); // 1 naira = 1 credit
+    const credits = Math.floor(validatedData.amount / 100); // Convert kobo back to Naira (1 naira = 1 credit)
     
     await c.env.DB.prepare(`
       INSERT INTO transactions (id, user_id, type, amount, credits, description, reference, status, created_at, updated_at)
@@ -525,6 +845,11 @@ app.post("/api/payments/verify", async (c) => {
         return c.json({ error: 'Transaction not found' }, 404);
       }
       
+      // Check if transaction is already processed to prevent double crediting
+      if (transaction.status === 'success') {
+        return c.json({ status: 'already_processed', credits_added: transaction.credits });
+      }
+      
       // Update transaction status
       await c.env.DB.prepare(`
         UPDATE transactions SET status = 'success', updated_at = ? WHERE id = ?
@@ -535,7 +860,7 @@ app.post("/api/payments/verify", async (c) => {
         UPDATE payments SET status = 'success', paystack_response = ?, updated_at = ? WHERE paystack_reference = ?
       `).bind(JSON.stringify(paystackData), Date.now(), validatedData.reference).run();
       
-      // Add credits to user account
+      // Add credits to user account (only if transaction wasn't already successful)
       await c.env.DB.prepare(`
         UPDATE users SET credits = credits + ?, updated_at = ? WHERE id = ?
       `).bind(transaction.credits, Date.now(), transaction.user_id).run();
@@ -699,7 +1024,7 @@ export default {
     try {
       const now = Date.now();
       
-      // 1. Clean up completed expired transfers
+      // 1. Clean up completed expired transfers (unmanaged files)
       const expiredTransfers = await env.DB.prepare(`
         SELECT id FROM transfers WHERE expires_at < ? AND status = 'complete'
       `).bind(now).all();
@@ -717,7 +1042,42 @@ export default {
         await cleanupIncompleteTransfer(env, transfer.id);
       }
       
-      console.log(`Cleaned up ${expiredTransfers.results.length} expired transfers and ${abandonedTransfers.results.length} abandoned transfers`);
+      // 3. Clean up expired managed files (user files that weren't extended)
+      const expiredManagedFiles = await env.DB.prepare(`
+        SELECT f.id, f.r2_object_key, f.filename, t.created_at as transfer_created_at
+        FROM files f
+        LEFT JOIN transfers t ON f.transfer_id = t.id
+        WHERE f.is_managed = 1 
+        AND (
+          (f.extended_until IS NOT NULL AND f.extended_until < ?) OR
+          (f.extended_until IS NULL AND (t.created_at + 86400000) < ?)
+        )
+      `).bind(now, now).all();
+      
+      for (const file of expiredManagedFiles.results as Array<{ id: string, r2_object_key: string, filename: string }>) {
+        try {
+          // Delete file from R2
+          if (file.r2_object_key) {
+            await env.FILE_BUCKET.delete(file.r2_object_key);
+            console.log(`Deleted expired managed file: ${file.filename}`);
+          }
+          
+          // Delete file extensions
+          await env.DB.prepare(`
+            DELETE FROM file_extensions WHERE file_id = ?
+          `).bind(file.id).run();
+          
+          // Delete file record
+          await env.DB.prepare(`
+            DELETE FROM files WHERE id = ?
+          `).bind(file.id).run();
+          
+        } catch (error) {
+          console.error(`Error cleaning up expired managed file ${file.filename}:`, error);
+        }
+      }
+      
+      console.log(`Cleaned up ${expiredTransfers.results.length} expired transfers, ${abandonedTransfers.results.length} abandoned transfers, and ${expiredManagedFiles.results.length} expired managed files`);
       
     } catch (error) {
       console.error('Error during cleanup:', error);

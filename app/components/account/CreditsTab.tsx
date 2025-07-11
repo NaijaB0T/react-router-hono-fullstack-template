@@ -12,6 +12,17 @@ interface PaystackResponse {
   };
 }
 
+interface Transaction {
+  id: string;
+  type: string;
+  amount: number;
+  credits: number;
+  description: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
 export function CreditsTab() {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -20,6 +31,8 @@ export function CreditsTab() {
   const [amount, setAmount] = useState("");
   const [fundingLoading, setFundingLoading] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactionsLoading, setTransactionsLoading] = useState(false);
 
   // Check for payment success parameter
   useEffect(() => {
@@ -33,9 +46,10 @@ export function CreditsTab() {
     }
   }, [searchParams, setSearchParams]);
 
-  // Fetch current credits
+  // Fetch current credits and transactions
   useEffect(() => {
     fetchCredits();
+    fetchTransactions();
   }, []);
 
   const handlePaymentVerification = async (reference: string) => {
@@ -53,6 +67,7 @@ export function CreditsTab() {
         if (data.status === 'success') {
           setPaymentSuccess(true);
           fetchCredits(); // Refresh credits balance
+          fetchTransactions(); // Refresh transaction history
           setTimeout(() => setPaymentSuccess(false), 5000); // Hide success message after 5 seconds
         }
       }
@@ -64,10 +79,20 @@ export function CreditsTab() {
   const fetchCredits = async () => {
     try {
       setLoading(true);
+      
+      // Only make API call in browser
+      if (typeof window === "undefined") {
+        setLoading(false);
+        return;
+      }
+      
+      const authUser = localStorage.getItem("auth_user");
+      const userId = authUser ? JSON.parse(authUser).id : "";
+      
       const response = await fetch("/api/credits", {
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${localStorage.getItem("auth_user") ? JSON.parse(localStorage.getItem("auth_user")!).id : ""}`,
+          "Authorization": `Bearer ${userId}`,
         },
       });
 
@@ -79,6 +104,37 @@ export function CreditsTab() {
       console.error("Error fetching credits:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchTransactions = async () => {
+    try {
+      setTransactionsLoading(true);
+      
+      // Only make API call in browser
+      if (typeof window === "undefined") {
+        setTransactionsLoading(false);
+        return;
+      }
+      
+      const authUser = localStorage.getItem("auth_user");
+      const userId = authUser ? JSON.parse(authUser).id : "";
+      
+      const response = await fetch("/api/transactions?limit=5", {
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${userId}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setTransactions(data.transactions || []);
+      }
+    } catch (error) {
+      console.error("Error fetching transactions:", error);
+    } finally {
+      setTransactionsLoading(false);
     }
   };
 
@@ -208,10 +264,61 @@ export function CreditsTab() {
       {/* Recent Transactions */}
       <div className="bg-white/10 rounded-lg p-6 mt-6">
         <h3 className="text-lg font-medium mb-4">Recent Transactions</h3>
-        <div className="text-center text-white/70 py-8">
-          <p>No transactions yet</p>
-          <p className="text-sm">Your transaction history will appear here</p>
-        </div>
+        
+        {transactionsLoading ? (
+          <div className="text-center text-white/70 py-8">
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white mx-auto mb-2"></div>
+            <p>Loading transactions...</p>
+          </div>
+        ) : transactions.length === 0 ? (
+          <div className="text-center text-white/70 py-8">
+            <p>No transactions yet</p>
+            <p className="text-sm">Your transaction history will appear here</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {transactions.map((transaction) => (
+              <div key={transaction.id} className="flex items-center justify-between py-3 px-4 bg-white/5 rounded-lg">
+                <div className="flex items-center space-x-3">
+                  <div className={`w-2 h-2 rounded-full ${
+                    transaction.status === 'success' ? 'bg-green-400' : 
+                    transaction.status === 'pending' ? 'bg-yellow-400' : 'bg-red-400'
+                  }`}></div>
+                  <div>
+                    <p className="text-white font-medium">{transaction.description}</p>
+                    <p className="text-white/60 text-sm">
+                      {new Date(transaction.created_at).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className={`font-medium ${
+                    transaction.type === 'credit' ? 'text-green-400' : 'text-red-400'
+                  }`}>
+                    {transaction.type === 'credit' ? '+' : '-'}{transaction.credits} credits
+                  </p>
+                  <p className="text-white/60 text-sm">
+                    ₦{(transaction.amount / 100).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            ))}
+            
+            {transactions.length >= 5 && (
+              <div className="text-center pt-4">
+                <button className="text-indigo-300 hover:text-indigo-200 text-sm">
+                  View all transactions
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -64,6 +64,12 @@ export default function AuthCallback() {
         // Store user data
         localStorage.setItem("auth_user", JSON.stringify(userData));
         
+        // Trigger storage event to notify auth context
+        window.dispatchEvent(new StorageEvent('storage', {
+          key: 'auth_user',
+          newValue: JSON.stringify(userData)
+        }));
+        
         // Mark as processed
         setProcessed(true);
         
