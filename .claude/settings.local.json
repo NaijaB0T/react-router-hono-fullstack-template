@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npm run typecheck:*)",
-      "Bash(wrangler d1 migrations apply:*)"
+      "Bash(wrangler d1 migrations apply:*)",
+      "Bash(npm run build:*)"
     ],
     "deny": []
   }

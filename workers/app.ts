@@ -366,52 +366,6 @@ app.get("/api/file/:transferId/:filename", async (c) => {
   }
 });
 
-
-app.get("*", (c) => {
-  const requestHandler = createRequestHandler(
-    () => import("virtual:react-router/server-build"),
-    import.meta.env.MODE,
-  );
-
-  return requestHandler(c.req.raw, {
-    cloudflare: { env: c.env, ctx: c.executionCtx },
-  });
-});
-
-// Cron job for cleanup
-export default {
-  fetch: app.fetch,
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    console.log('Running cleanup cron job...');
-    
-    try {
-      const now = Date.now();
-      
-      // 1. Clean up completed expired transfers
-      const expiredTransfers = await env.DB.prepare(`
-        SELECT id FROM transfers WHERE expires_at < ? AND status = 'complete'
-      `).bind(now).all();
-      
-      for (const transfer of expiredTransfers.results as Array<{ id: string }>) {
-        await cleanupTransfer(env, transfer.id, 'expired completed');
-      }
-      
-      // 2. Clean up abandoned incomplete transfers (older than 24 hours)
-      const abandonedTransfers = await env.DB.prepare(`
-        SELECT id FROM transfers WHERE expires_at < ? AND status = 'pending'
-      `).bind(now).all();
-      
-      for (const transfer of abandonedTransfers.results as Array<{ id: string }>) {
-        await cleanupIncompleteTransfer(env, transfer.id);
-      }
-      
-      console.log(`Cleaned up ${expiredTransfers.results.length} expired transfers and ${abandonedTransfers.results.length} abandoned transfers`);
-      
-    } catch (error) {
-      console.error('Error during cleanup:', error);
-    }
-  }
-
 // Helper function to clean up a completed transfer
 async function cleanupTransfer(env: Env, transferId: string, reason: string) {
   try {
@@ -487,4 +441,49 @@ async function cleanupIncompleteTransfer(env: Env, transferId: string) {
     console.error(`Error cleaning up incomplete transfer ${transferId}:`, error);
   }
 }
+
+app.get("*", (c) => {
+  const requestHandler = createRequestHandler(
+    () => import("virtual:react-router/server-build"),
+    import.meta.env.MODE,
+  );
+
+  return requestHandler(c.req.raw, {
+    cloudflare: { env: c.env, ctx: c.executionCtx },
+  });
+});
+
+// Cron job for cleanup
+export default {
+  fetch: app.fetch,
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    console.log('Running cleanup cron job...');
+    
+    try {
+      const now = Date.now();
+      
+      // 1. Clean up completed expired transfers
+      const expiredTransfers = await env.DB.prepare(`
+        SELECT id FROM transfers WHERE expires_at < ? AND status = 'complete'
+      `).bind(now).all();
+      
+      for (const transfer of expiredTransfers.results as Array<{ id: string }>) {
+        await cleanupTransfer(env, transfer.id, 'expired completed');
+      }
+      
+      // 2. Clean up abandoned incomplete transfers (older than 24 hours)
+      const abandonedTransfers = await env.DB.prepare(`
+        SELECT id FROM transfers WHERE expires_at < ? AND status = 'pending'
+      `).bind(now).all();
+      
+      for (const transfer of abandonedTransfers.results as Array<{ id: string }>) {
+        await cleanupIncompleteTransfer(env, transfer.id);
+      }
+      
+      console.log(`Cleaned up ${expiredTransfers.results.length} expired transfers and ${abandonedTransfers.results.length} abandoned transfers`);
+      
+    } catch (error) {
+      console.error('Error during cleanup:', error);
+    }
+  }
 };
