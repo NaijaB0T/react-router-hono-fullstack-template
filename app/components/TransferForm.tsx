@@ -193,6 +193,7 @@ export function TransferForm() {
     const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
     const MAX_RETRIES = 3;
     const RETRY_DELAY = 1000; // 1 second
+    const CONCURRENT_UPLOADS = 4; // Number of concurrent chunk uploads
     
     const file = fileInfo.file;
     const chunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -247,12 +248,33 @@ export function TransferForm() {
       }
     };
 
+    // Helper function to limit concurrent promises - batch approach
+    const limitConcurrency = async (
+      tasks: (() => Promise<any>)[],
+      limit: number
+    ): Promise<any[]> => {
+      const results: any[] = [];
+      
+      for (let i = 0; i < tasks.length; i += limit) {
+        const batch = tasks.slice(i, i + limit);
+        const batchResults = await Promise.all(batch.map(task => task()));
+        results.push(...batchResults);
+      }
+      
+      return results;
+    };
+
     let newPartsUploaded = 0;
+    let completedParts = 0;
     
     try {
+      // Create tasks for all parts that need to be uploaded
+      const uploadTasks = [];
+      
       for (let partNumber = startPart; partNumber <= chunks; partNumber++) {
         // Check if this part was already uploaded
         if (uploadParts.find(p => p.partNumber === partNumber)) {
+          completedParts++;
           continue;
         }
 
@@ -260,31 +282,48 @@ export function TransferForm() {
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
 
-        const uploadResult = await uploadChunkWithRetry(partNumber, chunk);
-        uploadParts.push({
-          partNumber: uploadResult.partNumber,
-          etag: uploadResult.etag
+        // Create upload task
+        uploadTasks.push(async () => {
+          const uploadResult = await uploadChunkWithRetry(partNumber, chunk);
+          
+          // Update parts array and increment counters
+          uploadParts.push({
+            partNumber: uploadResult.partNumber,
+            etag: uploadResult.etag
+          });
+          newPartsUploaded++;
+          completedParts++;
+
+          // Update progress in real-time
+          const progress = Math.round((completedParts / chunks) * 100);
+          setFormData(prev => ({
+            ...prev,
+            files: prev.files.map(f => 
+              f.id === fileInfo.id ? { 
+                ...f, 
+                progress,
+                uploadedParts: [...uploadParts], // Create new array to trigger re-render
+                currentPart: Math.max(...uploadParts.map(p => p.partNumber)),
+                status: 'uploading' as const
+              } : f
+            )
+          }));
+
+          // Save state after each successful chunk
+          saveUploadState({ transferId, formData });
+          
+          return uploadResult;
         });
-        newPartsUploaded++;
-
-        // Update file state with progress and uploaded parts
-        const progress = Math.round((partNumber / chunks) * 100);
-        setFormData(prev => ({
-          ...prev,
-          files: prev.files.map(f => 
-            f.id === fileInfo.id ? { 
-              ...f, 
-              progress,
-              uploadedParts: uploadParts,
-              currentPart: partNumber,
-              status: 'uploading' as const
-            } : f
-          )
-        }));
-
-        // Save state after each successful chunk
-        saveUploadState({ transferId, formData });
       }
+
+      // Execute uploads with concurrency limit
+      if (uploadTasks.length > 0) {
+        console.log(`Starting concurrent upload of ${uploadTasks.length} parts with ${CONCURRENT_UPLOADS} concurrent streams`);
+        await limitConcurrency(uploadTasks, CONCURRENT_UPLOADS);
+      }
+
+      // Sort upload parts by part number for completion
+      uploadParts.sort((a, b) => a.partNumber - b.partNumber);
 
       // Only mark as completed if we have all parts
       const allPartsUploaded = uploadParts.length === chunks;
@@ -297,7 +336,7 @@ export function TransferForm() {
         }));
       }
 
-      console.log(`Upload session: ${newPartsUploaded} new parts uploaded, ${uploadParts.length}/${chunks} total parts`);
+      console.log(`Concurrent upload session completed: ${newPartsUploaded} new parts uploaded, ${uploadParts.length}/${chunks} total parts`);
       return uploadParts;
     } catch (error) {
       // Check if this is a pause/abort operation (not an actual error)

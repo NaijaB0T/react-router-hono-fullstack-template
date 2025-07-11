@@ -50,6 +50,22 @@ export default function DownloadPage() {
     }
   }, [transferId]);
 
+  // Set up realtime countdown - must be at top level
+  useEffect(() => {
+    if (!downloadData) return;
+    
+    const updateTimeLeft = () => {
+      const now = Date.now();
+      const remaining = downloadData.transfer.expires_at - now;
+      setTimeLeft(Math.max(0, remaining));
+    };
+    
+    updateTimeLeft(); // Initial update
+    const interval = setInterval(updateTimeLeft, 1000); // Update every second
+    
+    return () => clearInterval(interval);
+  }, [downloadData]);
+
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -161,20 +177,6 @@ export default function DownloadPage() {
   }
 
   const { transfer, files } = downloadData;
-  
-  // Set up realtime countdown
-  React.useEffect(() => {
-    const updateTimeLeft = () => {
-      const now = Date.now();
-      const remaining = transfer.expires_at - now;
-      setTimeLeft(Math.max(0, remaining));
-    };
-    
-    updateTimeLeft(); // Initial update
-    const interval = setInterval(updateTimeLeft, 1000); // Update every second
-    
-    return () => clearInterval(interval);
-  }, [transfer.expires_at]);
   
   const formatTimeRemaining = (milliseconds: number): string => {
     if (milliseconds <= 0) return 'Expired';
