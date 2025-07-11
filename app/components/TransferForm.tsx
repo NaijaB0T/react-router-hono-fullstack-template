@@ -247,6 +247,8 @@ export function TransferForm() {
       }
     };
 
+    let newPartsUploaded = 0;
+    
     try {
       for (let partNumber = startPart; partNumber <= chunks; partNumber++) {
         // Check if this part was already uploaded
@@ -263,6 +265,7 @@ export function TransferForm() {
           partNumber: uploadResult.partNumber,
           etag: uploadResult.etag
         });
+        newPartsUploaded++;
 
         // Update file state with progress and uploaded parts
         const progress = Math.round((partNumber / chunks) * 100);
@@ -283,14 +286,18 @@ export function TransferForm() {
         saveUploadState({ transferId, formData });
       }
 
-      // Mark file as completed
-      setFormData(prev => ({
-        ...prev,
-        files: prev.files.map(f => 
-          f.id === fileInfo.id ? { ...f, status: 'completed' as const } : f
-        )
-      }));
+      // Only mark as completed if we have all parts
+      const allPartsUploaded = uploadParts.length === chunks;
+      if (allPartsUploaded) {
+        setFormData(prev => ({
+          ...prev,
+          files: prev.files.map(f => 
+            f.id === fileInfo.id ? { ...f, status: 'completed' as const, progress: 100 } : f
+          )
+        }));
+      }
 
+      console.log(`Upload session: ${newPartsUploaded} new parts uploaded, ${uploadParts.length}/${chunks} total parts`);
       return uploadParts;
     } catch (error) {
       // Check if this is a pause/abort operation (not an actual error)
@@ -347,7 +354,29 @@ export function TransferForm() {
 
   // Save upload state to localStorage
   const saveUploadState = (state: { transferId: string; formData: TransferFormData }) => {
-    localStorage.setItem('naijatransfer_upload_state', JSON.stringify(state));
+    // Create a serializable version of the state (without File objects)
+    const serializedFiles = state.formData.files.map(file => ({
+      id: file.id,
+      name: file.name,
+      size: file.size,
+      progress: file.progress,
+      status: file.status,
+      uploadId: file.uploadId,
+      key: file.key,
+      uploadedParts: file.uploadedParts,
+      currentPart: file.currentPart,
+      error: file.error
+      // Note: we can't save the actual File object
+    }));
+    
+    const serializableState = {
+      transferId: state.transferId,
+      formData: {
+        files: serializedFiles
+      }
+    };
+    
+    localStorage.setItem('naijatransfer_upload_state', JSON.stringify(serializableState));
   };
 
   // Load upload state from localStorage
@@ -363,6 +392,87 @@ export function TransferForm() {
   // Clear upload state from localStorage
   const clearUploadState = () => {
     localStorage.removeItem('naijatransfer_upload_state');
+  };
+
+  const promptFileReselection = async (fileInfo: FileInfo): Promise<void> => {
+    return new Promise((resolve) => {
+      // Create a temporary file input
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.style.display = 'none';
+      
+      // Set up file selection handler
+      fileInput.onchange = (event) => {
+        const selectedFiles = (event.target as HTMLInputElement).files;
+        if (selectedFiles && selectedFiles.length > 0) {
+          const selectedFile = selectedFiles[0];
+          
+          // Validate the file matches the original
+          if (selectedFile.name === fileInfo.name && selectedFile.size === fileInfo.size) {
+            // Update the file info with the new File object
+            setFormData(prev => ({
+              ...prev,
+              files: prev.files.map(f => 
+                f.id === fileInfo.id ? { 
+                  ...f, 
+                  file: selectedFile,
+                  status: 'paused' as const,
+                  error: undefined
+                } : f
+              )
+            }));
+            
+            // Now resume the upload with the file object
+            setTimeout(() => {
+              const updatedFileInfo = { ...fileInfo, file: selectedFile };
+              resumeFileUpload(updatedFileInfo);
+            }, 100);
+            
+            alert(`File "${selectedFile.name}" selected! Resuming upload from ${fileInfo.progress}%...`);
+          } else {
+            alert(`File mismatch! Please select the exact same file:\nExpected: ${fileInfo.name} (${formatFileSize(fileInfo.size)})\nSelected: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`);
+            setFormData(prev => ({
+              ...prev,
+              files: prev.files.map(f => 
+                f.id === fileInfo.id ? { 
+                  ...f, 
+                  status: 'error' as const,
+                  error: 'Wrong file selected. Please select the exact same file to resume.'
+                } : f
+              )
+            }));
+          }
+        }
+        
+        // Clean up
+        document.body.removeChild(fileInput);
+        resolve();
+      };
+      
+      // Set up cancel handler
+      fileInput.oncancel = () => {
+        document.body.removeChild(fileInput);
+        setFormData(prev => ({
+          ...prev,
+          files: prev.files.map(f => 
+            f.id === fileInfo.id ? { 
+              ...f, 
+              status: 'error' as const,
+              error: 'File selection cancelled. Cannot resume without file.'
+            } : f
+          )
+        }));
+        resolve();
+      };
+      
+      // Add to DOM and trigger file selection
+      document.body.appendChild(fileInput);
+      
+      // Show user instruction
+      alert(`To resume uploading "${fileInfo.name}" from ${fileInfo.progress}%, please select the same file again.`);
+      
+      fileInput.click();
+    });
   };
 
   const resetForm = () => {
@@ -407,8 +517,42 @@ export function TransferForm() {
   };
 
   const resumeFileUpload = async (fileInfo: FileInfo) => {
-    if (!fileInfo.uploadId || !fileInfo.key) {
-      console.error('Cannot resume upload: missing upload metadata');
+    // Check if file is already completed
+    if (fileInfo.status === 'completed') {
+      console.log('File already completed, no need to resume');
+      return;
+    }
+
+    // Check if we have the actual File object (needed for resume)
+    if (!fileInfo.file) {
+      console.log('File object missing, prompting user to re-select file');
+      await promptFileReselection(fileInfo);
+      return;
+    }
+
+    // Check for upload metadata after we have the file
+    if (!fileInfo.uploadId || !fileInfo.key || !transferId) {
+      console.log('Missing upload metadata - converting to fresh upload');
+      setFormData(prev => ({
+        ...prev,
+        files: prev.files.map(f => 
+          f.id === fileInfo.id ? { 
+            ...f, 
+            status: 'pending' as const,
+            error: undefined,
+            progress: 0,
+            uploadedParts: [],
+            currentPart: 0
+          } : f
+        )
+      }));
+      
+      // Clear any stale transfer state
+      setTransferId('');
+      clearUploadState();
+      setShowResumeNotification(false);
+      
+      alert('Upload will start fresh. Click "Upload Files" to begin.');
       return;
     }
 
@@ -430,20 +574,42 @@ export function TransferForm() {
         uploadId: fileInfo.uploadId,
         key: fileInfo.key
       };
+      
+      console.log(`Resuming upload for ${fileInfo.name}, current progress: ${fileInfo.progress}%`);
       const uploadParts = await uploadFileInChunks(fileInfo, fileData);
-      await completeFileUpload(transferId, fileData, uploadParts);
+      
+      // Check if file is now complete (uploadFileInChunks handles completion status)
+      // Only call completeFileUpload if we have all parts and the file status is 'completed'
+      const updatedFile = formData.files.find(f => f.id === fileInfo.id);
+      if (updatedFile && updatedFile.status === 'completed' && uploadParts && uploadParts.length > 0) {
+        console.log(`Completing upload for ${fileInfo.name} with ${uploadParts.length} parts`);
+        await completeFileUpload(transferId, fileData, uploadParts);
+      } else {
+        console.log(`Upload not complete for ${fileInfo.name}, resuming later or paused`);
+      }
     } catch (error) {
-      console.error('Resume upload failed:', error);
-      setFormData(prev => ({
-        ...prev,
-        files: prev.files.map(f => 
-          f.id === fileInfo.id ? { 
-            ...f, 
-            status: 'error' as const,
-            error: error instanceof Error ? error.message : 'Resume failed'
-          } : f
-        )
-      }));
+      // Handle pause/abort vs real errors
+      if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Upload paused')) {
+        console.log(`Upload paused again for ${fileInfo.name}`);
+        setFormData(prev => ({
+          ...prev,
+          files: prev.files.map(f => 
+            f.id === fileInfo.id ? { ...f, status: 'paused' as const } : f
+          )
+        }));
+      } else {
+        console.error('Resume upload failed:', error);
+        setFormData(prev => ({
+          ...prev,
+          files: prev.files.map(f => 
+            f.id === fileInfo.id ? { 
+              ...f, 
+              status: 'error' as const,
+              error: error instanceof Error ? error.message : 'Resume failed'
+            } : f
+          )
+        }));
+      }
     }
   };
 
@@ -485,7 +651,19 @@ export function TransferForm() {
       const hasIncompleteFiles = savedState.formData.files.some(f => f.status !== 'completed');
       if (hasIncompleteFiles) {
         setShowResumeNotification(true);
-        setFormData(savedState.formData);
+        
+        // Mark files without File objects as needing re-selection
+        const updatedFiles = savedState.formData.files.map(file => {
+          return {
+            ...file,
+            status: file.status === 'completed' ? 'completed' as const : 'error' as const,
+            error: file.status !== 'completed' ? 'Click the 🔄 button to re-select this file and resume upload.' : undefined
+          };
+        });
+        
+        setFormData({
+          files: updatedFiles
+        });
         setTransferId(savedState.transferId);
       }
     }
@@ -589,16 +767,16 @@ export function TransferForm() {
 
       {/* Resume Notification */}
       {showResumeNotification && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
-              <span className="text-yellow-600 text-lg mr-2">⚠️</span>
+              <span className="text-blue-600 text-lg mr-2">🔄</span>
               <div>
-                <p className="text-sm font-medium text-yellow-800">
+                <p className="text-sm font-medium text-blue-800">
                   Interrupted upload detected
                 </p>
-                <p className="text-xs text-yellow-600">
-                  You have an unfinished upload. Would you like to resume it?
+                <p className="text-xs text-blue-600">
+                  You can resume your upload! Click "Resume" and re-select the same files to continue from where you left off.
                 </p>
               </div>
             </div>
@@ -607,7 +785,7 @@ export function TransferForm() {
                 type="button"
                 onClick={() => {
                   formData.files.forEach(file => {
-                    if (file.status === 'uploading' || file.status === 'paused' || file.status === 'error') {
+                    if (file.status === 'error' && file.uploadId && file.key) {
                       resumeFileUpload(file);
                     }
                   });
