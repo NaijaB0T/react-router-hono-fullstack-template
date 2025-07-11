@@ -16,26 +16,34 @@ export default function AuthCallback() {
       const state = searchParams.get("state");
       const error = searchParams.get("error");
       
+      console.log("Auth callback params:", { code: !!code, state, error });
+      
       if (error) {
         console.error("Auth error:", error);
+        // Clear any stale auth data
+        localStorage.removeItem("auth_user");
         navigate("/");
         return;
       }
       
       if (!code) {
         console.error("No authorization code received");
+        localStorage.removeItem("auth_user");
+        navigate("/");
+        return;
+      }
+      
+      if (!state || (state !== "login" && state !== "register")) {
+        console.error("Invalid or missing state parameter:", state);
+        localStorage.removeItem("auth_user");
         navigate("/");
         return;
       }
 
       try {
-        // Check if we've already processed this callback
-        const currentUser = localStorage.getItem("auth_user");
-        if (currentUser) {
-          console.log("User already authenticated, redirecting...");
-          navigate("/");
-          return;
-        }
+        // Clear any existing auth data to prevent conflicts
+        localStorage.removeItem("auth_user");
+        console.log("Cleared existing auth data to prevent conflicts");
 
         // Use OpenAuth client to exchange the code
         const authClient = createClient({
