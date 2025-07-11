@@ -626,6 +626,29 @@ export function TransferForm() {
 
   const [showResumeNotification, setShowResumeNotification] = useState(false);
 
+  // Browser close/refresh warning
+  React.useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      // Check if there are active uploads
+      const hasActiveUploads = formData.files.some(file => 
+        file.status === 'uploading' || file.status === 'paused'
+      );
+      
+      if (hasActiveUploads || isUploading) {
+        const message = 'You have uploads in progress. If you leave this page, you\'ll need to re-select your files and start fresh. Are you sure you want to leave?';
+        event.preventDefault();
+        event.returnValue = message;
+        return message;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [formData.files, isUploading]);
+
   // Load saved upload on component mount
   React.useEffect(() => {
     const savedState = loadUploadState();
@@ -740,9 +763,15 @@ export function TransferForm() {
             <p className="text-xs text-green-700 mb-2">
               Upload up to <strong>15GB per file</strong> completely free! Files are automatically deleted after <strong>24 hours</strong> to keep storage costs manageable for our developers.
             </p>
-            <p className="text-xs text-green-600">
+            <p className="text-xs text-green-600 mb-2">
               This service is provided free of charge. The short duration helps us maintain sustainable hosting costs while serving the community.
             </p>
+            <div className="bg-blue-100 border border-blue-200 rounded p-2 mt-2">
+              <p className="text-xs text-blue-700">
+                <strong>💡 Resume Tip:</strong> You can pause and resume uploads while staying on this page. 
+                If you refresh or close the browser, files will need to be re-selected for a fresh upload.
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -915,6 +944,17 @@ export function TransferForm() {
                 {formData.files.filter(f => f.status === 'completed').length} / {formData.files.length} files completed
               </span>
             </div>
+            
+            {/* Resume Warning */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded p-2 mb-3">
+              <div className="flex items-center space-x-2">
+                <span className="text-yellow-600 text-sm">⚠️</span>
+                <p className="text-xs text-yellow-700">
+                  <strong>Stay on this page</strong> to use pause/resume. Closing or refreshing will require re-uploading.
+                </p>
+              </div>
+            </div>
+            
             <div className="flex space-x-2">
               <button
                 type="button"

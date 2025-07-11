@@ -161,13 +161,12 @@ export default function DownloadPage() {
   }
 
   const { transfer, files } = downloadData;
-  const expiresAt = new Date(transfer.expires_at);
   
   // Set up realtime countdown
   React.useEffect(() => {
     const updateTimeLeft = () => {
       const now = Date.now();
-      const remaining = expiresAt.getTime() - now;
+      const remaining = transfer.expires_at - now;
       setTimeLeft(Math.max(0, remaining));
     };
     
@@ -175,7 +174,7 @@ export default function DownloadPage() {
     const interval = setInterval(updateTimeLeft, 1000); // Update every second
     
     return () => clearInterval(interval);
-  }, [expiresAt]);
+  }, [transfer.expires_at]);
   
   const formatTimeRemaining = (milliseconds: number): string => {
     if (milliseconds <= 0) return 'Expired';
