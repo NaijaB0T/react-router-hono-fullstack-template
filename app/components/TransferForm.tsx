@@ -244,26 +244,39 @@ export function TransferForm() {
     };
 
     const uploadChunkWithRetry = async (partNumber: number, chunk: Blob, retryCount = 0): Promise<{ partNumber: number; etag: string }> => {
-      // Check if upload is paused
-      if (pausedUploads.has(fileInfo.id)) {
-        throw new Error('Upload paused');
-      }
-
-      // Check if aborted
-      if (abortController.signal.aborted) {
-        throw new Error('Upload cancelled');
-      }
-
       try {
         // Store chunk size for progress calculation
         chunkSizes.set(partNumber, chunk.size);
         chunkProgress.set(partNumber, 0);
 
         return await new Promise<{ partNumber: number; etag: string }>((resolve, reject) => {
+          // Check for pause/abort before starting each upload
+          const checkPauseOrAbort = () => {
+            if (pausedUploads.has(fileInfo.id)) {
+              chunkProgress.delete(partNumber);
+              reject(new Error('Upload paused'));
+              return true;
+            }
+            if (abortController.signal.aborted) {
+              chunkProgress.delete(partNumber);
+              reject(new Error('Upload cancelled'));
+              return true;
+            }
+            return false;
+          };
+
+          if (checkPauseOrAbort()) return;
+
           const xhr = new XMLHttpRequest();
           
-          // Set up progress tracking
+          // Set up progress tracking with pause checks
           xhr.upload.addEventListener('progress', (event) => {
+            // Check for pause during upload
+            if (pausedUploads.has(fileInfo.id)) {
+              xhr.abort();
+              return;
+            }
+            
             if (event.lengthComputable) {
               chunkProgress.set(partNumber, event.loaded);
               updateRealTimeProgress();
@@ -279,9 +292,11 @@ export function TransferForm() {
                 chunkProgress.delete(partNumber);
                 resolve(result);
               } catch (e) {
+                chunkProgress.delete(partNumber);
                 reject(new Error('Invalid JSON response'));
               }
             } else {
+              chunkProgress.delete(partNumber);
               reject(new Error(`HTTP ${xhr.status}: ${xhr.statusText}`));
             }
           });
@@ -292,9 +307,14 @@ export function TransferForm() {
             reject(new Error('Network error'));
           });
 
+          // Handle abort - check if it's pause or cancel
           xhr.addEventListener('abort', () => {
             chunkProgress.delete(partNumber);
-            reject(new Error('Upload cancelled'));
+            if (pausedUploads.has(fileInfo.id)) {
+              reject(new Error('Upload paused'));
+            } else {
+              reject(new Error('Upload cancelled'));
+            }
           });
 
           // Handle abort controller
@@ -412,10 +432,30 @@ export function TransferForm() {
       console.log(`Concurrent upload session completed: ${newPartsUploaded} new parts uploaded, ${uploadParts.length}/${chunks} total parts`);
       return uploadParts;
     } catch (error) {
-      // Check if this is a pause/abort operation (not an actual error)
-      if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Upload paused')) {
+      // Check if this is a pause operation (not an actual error)
+      if (error instanceof Error && error.message === 'Upload paused') {
         // This is expected - user paused the upload
         console.log(`Upload paused for file ${fileInfo.id}`);
+        
+        // Update file status to paused, not error
+        setFormData(prev => ({
+          ...prev,
+          files: prev.files.map(f => 
+            f.id === fileInfo.id ? { 
+              ...f, 
+              status: 'paused' as const,
+              uploadedParts: [...uploadParts], // Save current progress
+              currentPart: uploadParts.length > 0 ? Math.max(...uploadParts.map(p => p.partNumber)) : 0
+            } : f
+          )
+        }));
+        
+        return []; // Return empty array to avoid completing the upload
+      }
+      
+      // Check if this is an abort/cancel operation
+      if (error instanceof Error && (error.name === 'AbortError' || error.message === 'Upload cancelled')) {
+        console.log(`Upload cancelled for file ${fileInfo.id}`);
         return []; // Return empty array to avoid completing the upload
       }
       
@@ -704,10 +744,48 @@ export function TransferForm() {
       return;
     }
 
-    // For production reliability, always convert to fresh upload after page refresh
-    // Multipart upload state is unreliable across browser sessions
-    console.log('Converting to fresh upload for reliability');
-    await convertToFreshUpload(fileInfo);
+    // Remove from paused uploads and start resuming
+    setPausedUploads(prev => {
+      const newSet = new Set(prev);
+      newSet.delete(fileInfo.id);
+      return newSet;
+    });
+
+    // Update status to uploading
+    setFormData(prev => ({
+      ...prev,
+      files: prev.files.map(f => 
+        f.id === fileInfo.id ? { ...f, status: 'uploading' as const } : f
+      )
+    }));
+
+    // Resume the upload from where it left off
+    try {
+      const fileData = {
+        key: fileInfo.key,
+        uploadId: fileInfo.uploadId
+      };
+      
+      console.log(`Resuming upload for ${fileInfo.name} from part ${(fileInfo.currentPart || 0) + 1}`);
+      const uploadParts = await uploadFileInChunks(fileInfo, fileData);
+      
+      // Complete upload if we have all parts
+      if (uploadParts.length > 0) {
+        await completeFileUpload(transferId, fileData, uploadParts);
+      }
+    } catch (error) {
+      console.error('Resume failed:', error);
+      setFormData(prev => ({
+        ...prev,
+        files: prev.files.map(f => 
+          f.id === fileInfo.id ? { 
+            ...f, 
+            status: 'error' as const,
+            error: error instanceof Error ? error.message : 'Resume failed'
+          } : f
+        )
+      }));
+    }
   };
 
   const retryFileUpload = (fileInfo: FileInfo) => {
